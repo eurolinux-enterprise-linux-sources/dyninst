@@ -50,6 +50,7 @@
 #include "mapped_module.h"
 #include "instPoint.h"
 #include "hybridAnalysis.h"
+#include "BPatch_object.h"
 
 // ProcControlAPI interface
 #include "dynProcess.h"
@@ -62,6 +63,7 @@
 
 #include <fstream>
 
+using namespace std;
 using namespace SymtabAPI;
 
 extern void loadNativeDemangler();
@@ -163,13 +165,20 @@ BPatch::BPatch()
 
     stdTypes = BPatch_typeCollection::getGlobalTypeCollection();
     vector<Type *> *sTypes = Symtab::getAllstdTypes();
-    for(unsigned i=0; i< sTypes->size(); i++)
-        stdTypes->addType(new BPatch_type((*sTypes)[i]));
+    BPatch_type* type = NULL;
+    for(const auto& t: *sTypes) {
+        stdTypes->addType(type = new BPatch_type(t));
+        type->decrRefCount();
+    }
+    delete sTypes;
 
     builtInTypes = new BPatch_builtInTypeCollection;
     sTypes = Symtab::getAllbuiltInTypes();
-    for(unsigned i=0; i< sTypes->size(); i++)
-        builtInTypes->addBuiltInType(new BPatch_type((*sTypes)[i]));
+    for(const auto& t: *sTypes) {
+        builtInTypes->addBuiltInType(type = new BPatch_type(t));
+        type->decrRefCount();
+    }
+    delete sTypes;
 
     //loadNativeDemangler();
 
@@ -944,7 +953,7 @@ void BPatch::registerDynamicCallsiteEvent(BPatch_process *process, Address callT
  * Register a new module loaded by a process (e.g., dlopen)
  */
 
-void BPatch::registerLoadedModule(PCProcess *process, mapped_module *mod) {
+void BPatch::registerLoadedModule(PCProcess *process, mapped_object *obj) {
 
     BPatch_process *bProc = BPatch::bpatch->getProcessByPid(process->getPid());
     if (!bProc) return; // Done
@@ -955,10 +964,10 @@ void BPatch::registerLoadedModule(PCProcess *process, mapped_module *mod) {
     BPatch_image *bImage = bProc->getImage();
     assert(bImage); // This we can assert to be true
     
-    BPatch_module *bpmod = bImage->findOrCreateModule(mod);
+    BPatch_object *bpobj = bImage->findOrCreateObject(obj);
 
     if( dynLibraryCallback ) {
-        dynLibraryCallback(bProc->threads[0], bpmod, true);
+        dynLibraryCallback(bProc->threads[0], bpobj, true);
     }
 }
 
@@ -968,7 +977,7 @@ void BPatch::registerLoadedModule(PCProcess *process, mapped_module *mod) {
  * Register a new module loaded by a process (e.g., dlopen)
  */
 
-void BPatch::registerUnloadedModule(PCProcess *process, mapped_module *mod) {
+void BPatch::registerUnloadedModule(PCProcess *process, mapped_object *obj) {
 
     BPatch_process *bProc = BPatch::bpatch->getProcessByPid(process->getPid());
     if (!bProc) return; // Done
@@ -981,16 +990,16 @@ void BPatch::registerUnloadedModule(PCProcess *process, mapped_module *mod) {
         return;
     }
     
-    BPatch_module *bpmod = bImage->findModule(mod);
-    if (bpmod == NULL) return;
+    BPatch_object *bpobj = bImage->findObject(obj);
+    if (bpobj == NULL) return;
 
     
     // For now we use the same callback for load and unload of library....
     if( dynLibraryCallback ) {
-        dynLibraryCallback(bProc->threads[0], bpmod, false);
+        dynLibraryCallback(bProc->threads[0], bpobj, false);
     }
 
-    bImage->removeModule(bpmod);
+    bImage->removeObject(bpobj);
 }
 
 
@@ -1210,7 +1219,11 @@ BPatch_process *BPatch::processCreate(const char *path, const char *argv[],
    ret->triggerInitialThreadEvents();
 
    if (ret->lowlevel_process()->isExploratoryModeOn()) {
-       ret->getHybridAnalysis()->init();
+       if (!ret->getHybridAnalysis()->init()) {
+           delete ret;
+           reportError(BPatchFatal, 68, "create process failed defensive instrumentation");
+           return NULL;
+       }
    }
 
    return ret;
@@ -1329,7 +1342,8 @@ bool BPatch::waitForStatusChange() {
     bool processRunning = false;
     for(auto i = info->procsByPid.begin(); i != info->procsByPid.end(); ++i) 
     {
-       if( !i->second->isStopped() ) {
+       if( !i->second->isStopped() &&
+	   !i->second->isTerminated()) {
           processRunning = true;
           break;
        }

@@ -29,7 +29,7 @@
  */
 
 #include "common/h/SymReader.h"
-#include "elf/h/Elf_X.h"
+#include "Elf_X.h"
 #include "common/src/headers.h"
 
 #include <map>
@@ -86,8 +86,11 @@ class SYMLITE_EXPORT SymElf : public Dyninst::SymReader
 
    virtual bool isValidSymbol(const Symbol_t &sym);
    virtual unsigned getAddressWidth();
-   virtual unsigned long getSymbolSize(const Symbol_t &sym);
+   virtual bool getABIVersion(int &major, int &minor) const;
+   virtual bool isBigEndianDataEncoding() const;
+   virtual Architecture getArchitecture() const;
 
+   virtual unsigned long getSymbolSize(const Symbol_t &sym);
    virtual Section_t getSectionByName(std::string name);
    virtual Section_t getSectionByAddress(Dyninst::Address addr);
    virtual Dyninst::Address getSectionAddress(Section_t sec);

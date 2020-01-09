@@ -18,21 +18,25 @@ set (SRC_LIST
      src/InstructionDecoder.C 
      src/InstructionDecoder-x86.C
      src/InstructionDecoder-power.C 
+     src/InstructionDecoder-aarch64.C 
      src/InstructionDecoderImpl.C
   )
 SET_SOURCE_FILES_PROPERTIES(${SRC_LIST} PROPERTIES LANGUAGE CXX)
 
+# Shave 3 minute off of the time it takes to compile this file by falling back to not tracking
+# variables by default, rather then waiting until the variable tracking limit
+# is reached.
+if (${CMAKE_CXX_COMPILER_ID} MATCHES "GNU")
+set_source_files_properties(src/InstructionDecoder-aarch64.C PROPERTIES COMPILE_FLAGS
+    -fno-var-tracking-assignments)
+endif()
+
 ADD_DEFINITIONS(-DINSTRUCTION_LIB)
 
-add_library (instructionAPI ${SRC_LIST})
-add_library (instructionAPI_static STATIC ${SRC_LIST})
-target_link_private_libraries (instructionAPI common)
-FILE (GLOB headers "h/*.h")
-set_target_properties (instructionAPI instructionAPI_static PROPERTIES PUBLIC_HEADER "${headers}")
+dyninst_library(instructionAPI common)
 
-INSTALL (TARGETS instructionAPI instructionAPI_static
-        EXPORT DyninstTargets
-        RUNTIME DESTINATION ${INSTALL_LIB_DIR}
-        LIBRARY DESTINATION ${INSTALL_LIB_DIR}
-        ARCHIVE DESTINATION ${INSTALL_LIB_DIR}
-        PUBLIC_HEADER DESTINATION ${INSTALL_INCLUDE_DIR})
+target_link_private_libraries(instructionAPI ${Boost_LIBRARIES})
+
+if (USE_COTIRE)
+    cotire(instructionAPI)
+endif()

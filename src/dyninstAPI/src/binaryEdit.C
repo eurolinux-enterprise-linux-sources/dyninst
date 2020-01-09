@@ -162,7 +162,6 @@ bool BinaryEdit::writeDataWord(void *inOther,
 
 const Address ADDRESS_LO = (Address)0;
 const Address ADDRESS_HI = (Address)(~(Address)0);
-const unsigned HEAP_STAT_BUF_SIZE = (0x100000);
 
 Address BinaryEdit::inferiorMalloc(unsigned size,
                                inferiorHeapType /*ignored*/,
@@ -305,6 +304,7 @@ void BinaryEdit::deleteBinaryEdit() {
         dependentRelocations.erase(dependentRelocations.begin());
         delete rel;
     }
+    delete memoryTracker_;
 }
 
 BinaryEdit *BinaryEdit::openFile(const std::string &file, 
@@ -431,7 +431,10 @@ bool BinaryEdit::getResolvedLibraryPath(const std::string &, std::vector<std::st
 }
 #endif
 
-#if !(defined(cap_binary_rewriter) && (defined(arch_x86) || defined(arch_x86_64) || defined(arch_power))) 
+#if !(defined(cap_binary_rewriter) && (defined(arch_x86) || defined(arch_x86_64)\
+		|| defined(arch_power)   \
+		|| defined(arch_aarch64) \
+		)) 
 bool BinaryEdit::doStaticBinarySpecialCases() {
     return true;
 }
@@ -558,9 +561,9 @@ bool BinaryEdit::writeFile(const std::string &newFileName)
       // Okay, that does it for the old stuff.
 
       // Now we need to get the new stuff. That's all the allocated memory. First, big
-      // buffer to hold it.
+      // buffer to hold it.  Use calloc so gaps from inferiorFree/Realloc are just zero.
 
-      void *newSectionPtr = malloc(highWaterMark_ - lowWaterMark_);
+      void *newSectionPtr = calloc(highWaterMark_ - lowWaterMark_, 1);
 
       pdvector<codeRange *> writes;
       memoryTracker_->elements(writes);
@@ -903,32 +906,6 @@ void BinaryEdit::setupRTLibrary(std::vector<BinaryEdit *> &r)
    for(rtlib_it = r.begin(); rtlib_it != r.end(); ++rtlib_it) {
        runtime_lib.insert((*rtlib_it)->getMappedObject());
    }
-}
-
-void BinaryEdit::setTrampGuard(int_variable* tg)
-{
-  trampGuardBase_ = tg;
-}
-
-
-int_variable* BinaryEdit::createTrampGuard()
-{
-  // If we have one, just return it
-  if(trampGuardBase_) return trampGuardBase_;
-  assert(rtlib.size());
-
-  std::vector<BinaryEdit *>::iterator rtlib_it;
-  const int_variable *var = NULL;
-  for(rtlib_it = rtlib.begin(); rtlib_it != rtlib.end(); ++rtlib_it) {
-      mapped_object *mobj = (*rtlib_it)->getMappedObject();
-      var = mobj->getVariable("DYNINST_default_tramp_guards");
-      if( var ) break;
-  }
-  
-  assert(var);
-  trampGuardBase_ = const_cast<int_variable *>(var);
-  
-  return trampGuardBase_;
 }
 
 vector<BinaryEdit *> &BinaryEdit::rtLibrary()

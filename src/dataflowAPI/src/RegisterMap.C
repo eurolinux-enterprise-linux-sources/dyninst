@@ -1,28 +1,28 @@
 /*
  * See the dyninst/COPYRIGHT file for copyright information.
- * 
+ *
  * We provide the Paradyn Tools (below described as "Paradyn")
  * on an AS IS basis, and do not warrant its validity or performance.
  * We reserve the right to update, modify, or discontinue this
  * software at any time.  We shall have no obligation to supply such
  * updates or modifications or any other form of support to you.
- * 
+ *
  * By your use of Paradyn, you understand and agree that we (or any
  * other person or entity with proprietary rights in Paradyn) are
  * under no obligation to provide either maintenance services,
  * update services, notices of latent defects, or correction of
  * defects for Paradyn.
- * 
+ *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
  * version 2.1 of the License, or (at your option) any later version.
- * 
+ *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * Lesser General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
@@ -36,20 +36,21 @@
 using namespace boost::assign;
 
 // We use the singleton approach, rather than static construction, to ensure the
-// register maps are created correctly. In at least one case (Ubuntu 12.04) they 
-// weren't. 
+// register maps are created correctly. In at least one case (Ubuntu 12.04) they
+// weren't.
 
 namespace Dyninst {
 namespace DataflowAPI {
 
-#if !defined(NO_INITIALIZER_LIST_SUPPORT) && !defined(os_windows)
-   // This fails on VS2010; revisit when we move to VS2012. 
+#if !defined(NO_INITIALIZER_LIST_SUPPORT) && (!defined(os_windows) || _MSC_VER >= 1900)
+   // This doesn't fail on VS 2015, but may fail on other versions post 2010.
+   // This fails on VS2010; revisit when we move to VS2012.
    // Also on gcc 4.3.
 
 RegisterMap &machRegIndex_x86() {
    static RegisterMap mrmap;
    if (mrmap.empty()) {
-      mrmap = { 
+      mrmap = {
          {x86::eax, 0},
          {x86::ecx, 1},
          {x86::edx, 2},
@@ -85,39 +86,135 @@ RegisterMap &machRegIndex_x86() {
          {x86::oeax, 32},
          {x86::fsbase, 33},
          {x86::gsbase, 34},
-         {x86::xmm0, 35},
-         {x86::xmm1, 36},
-         {x86::xmm2, 37},
-         {x86::xmm3, 38},
-         {x86::xmm4, 39},
-         {x86::xmm5, 40},
-         {x86::xmm6, 41},
-         {x86::xmm7, 42},
-         {x86::mm0, 43},  // mm0 to mm7 and st0 to st7 collapse to mm0
-         {x86::cr0, 44},
-         {x86::cr1, 45},
-         {x86::cr2, 46},
-         {x86::cr3, 47},
-         {x86::cr4, 48},
-         {x86::cr5, 49},
-         {x86::cr6, 50},
-         {x86::cr7, 51},
-         {x86::dr0, 52},
-         {x86::dr1, 53},
-         {x86::dr2, 54},
-         {x86::dr3, 55},
-         {x86::dr4, 56},
-         {x86::dr5, 57},
-         {x86::dr6, 58},
-         {x86::dr7, 59},
-         {x86::tr0, 60},
-         {x86::tr1, 61},
-         {x86::tr2, 62},
-         {x86::tr3, 63},
-         {x86::tr4, 64},
-         {x86::tr5, 65},
-         {x86::tr6, 66},
-         {x86::tr7, 67} };
+         {x86::k0, 35},
+         {x86::k1, 36},
+         {x86::k2, 37},
+         {x86::k3, 38},
+         {x86::k4, 39},
+         {x86::k5, 40},
+         {x86::k6, 41},
+         {x86::k7, 42},
+         {x86::zmm0, 43},
+         {x86::zmm1, 44},
+         {x86::zmm2, 45},
+         {x86::zmm3, 46},
+         {x86::zmm4, 47},
+         {x86::zmm5, 48},
+         {x86::zmm6, 49},
+         {x86::zmm7, 50},
+         {x86::zmm8, 51},
+         {x86::zmm9, 52},
+         {x86::zmm10, 53},
+         {x86::zmm11, 54},
+         {x86::zmm12, 55},
+         {x86::zmm13, 56},
+         {x86::zmm14, 57},
+         {x86::zmm15, 58},
+         {x86::zmm16, 59},
+         {x86::zmm17, 60},
+         {x86::zmm18, 61},
+         {x86::zmm19, 62},
+         {x86::zmm20, 63},
+         {x86::zmm21, 64},
+         {x86::zmm22, 65},
+         {x86::zmm23, 66},
+         {x86::zmm24, 67},
+         {x86::zmm25, 68},
+         {x86::zmm26, 69},
+         {x86::zmm27, 70},
+         {x86::zmm28, 71},
+         {x86::zmm29, 72},
+         {x86::zmm30, 73},
+         {x86::zmm31, 74},
+         {x86::ymm0, 75},
+         {x86::ymm1, 76},
+         {x86::ymm2, 77},
+         {x86::ymm3, 78},
+         {x86::ymm4, 79},
+         {x86::ymm5, 80},
+         {x86::ymm6, 81},
+         {x86::ymm7, 82},
+         {x86::ymm8, 83},
+         {x86::ymm9, 84},
+         {x86::ymm10, 85},
+         {x86::ymm11, 86},
+         {x86::ymm12, 87},
+         {x86::ymm13, 88},
+         {x86::ymm14, 89},
+         {x86::ymm15, 90},
+         {x86::ymm16, 91},
+         {x86::ymm17, 92},
+         {x86::ymm18, 93},
+         {x86::ymm19, 94},
+         {x86::ymm20, 95},
+         {x86::ymm21, 96},
+         {x86::ymm22, 97},
+         {x86::ymm23, 98},
+         {x86::ymm24, 99},
+         {x86::ymm25, 100},
+         {x86::ymm26, 101},
+         {x86::ymm27, 102},
+         {x86::ymm28, 103},
+         {x86::ymm29, 104},
+         {x86::ymm30, 105},
+         {x86::ymm31, 106},
+         {x86::xmm0, 107},
+         {x86::xmm1, 108},
+         {x86::xmm2, 109},
+         {x86::xmm3, 110},
+         {x86::xmm4, 111},
+         {x86::xmm5, 112},
+         {x86::xmm6, 113},
+         {x86::xmm7, 114},
+         {x86::xmm8, 115},
+         {x86::xmm9, 116},
+         {x86::xmm10, 117},
+         {x86::xmm11, 118},
+         {x86::xmm12, 119},
+         {x86::xmm13, 120},
+         {x86::xmm14, 121},
+         {x86::xmm15, 122},
+         {x86::xmm16, 123},
+         {x86::xmm17, 124},
+         {x86::xmm18, 125},
+         {x86::xmm19, 126},
+         {x86::xmm20, 127},
+         {x86::xmm21, 128},
+         {x86::xmm22, 129},
+         {x86::xmm23, 130},
+         {x86::xmm24, 131},
+         {x86::xmm25, 132},
+         {x86::xmm26, 133},
+         {x86::xmm27, 134},
+         {x86::xmm28, 135},
+         {x86::xmm29, 136},
+         {x86::xmm30, 137},
+         {x86::xmm31, 138},
+         {x86::mm0, 139},  // mm0 to mm7 and st0 to st7 collapse to mm0
+         {x86::cr0, 140},
+         {x86::cr1, 141},
+         {x86::cr2, 142},
+         {x86::cr3, 143},
+         {x86::cr4, 144},
+         {x86::cr5, 145},
+         {x86::cr6, 146},
+         {x86::cr7, 147},
+         {x86::dr0, 148},
+         {x86::dr1, 149},
+         {x86::dr2, 150},
+         {x86::dr3, 151},
+         {x86::dr4, 152},
+         {x86::dr5, 153},
+         {x86::dr6, 154},
+         {x86::dr7, 155},
+         {x86::tr0, 156},
+         {x86::tr1, 157},
+         {x86::tr2, 158},
+         {x86::tr3, 159},
+         {x86::tr4, 160},
+         {x86::tr5, 161},
+         {x86::tr6, 162},
+         {x86::tr7, 163} };
    }
    return mrmap;
 }
@@ -163,47 +260,135 @@ RegisterMap &machRegIndex_x86_64() {
          {x86_64::orax, 34},
          {x86_64::fsbase, 35},
          {x86_64::gsbase, 36},
-         {x86_64::xmm0, 37},
-         {x86_64::xmm1, 38},
-         {x86_64::xmm2, 39},
-         {x86_64::xmm3, 40},
-         {x86_64::xmm4, 41},
-         {x86_64::xmm5, 42},
-         {x86_64::xmm6, 43},
-         {x86_64::xmm7, 44},
-         {x86_64::xmm8, 45},
-         {x86_64::xmm9, 46},
-         {x86_64::xmm10, 47},
-         {x86_64::xmm11, 48},
-         {x86_64::xmm12, 49},
-         {x86_64::xmm13, 50},
-         {x86_64::xmm14, 51},
-         {x86_64::xmm15, 52},
-         {x86_64::mm0, 53}, // mm0 to mm7 and st0 to st7 collapse to mm0
-         {x86_64::cr0, 54},
-         {x86_64::cr1, 55},
-         {x86_64::cr2, 56},
-         {x86_64::cr3, 57},
-         {x86_64::cr4, 58},
-         {x86_64::cr5, 59},
-         {x86_64::cr6, 60},
-         {x86_64::cr7, 61},
-         {x86_64::dr0, 62},
-         {x86_64::dr1, 63},
-         {x86_64::dr2, 64},
-         {x86_64::dr3, 65},
-         {x86_64::dr4, 66},
-         {x86_64::dr5, 67},
-         {x86_64::dr6, 68},
-         {x86_64::dr7, 69},
-         {x86_64::tr0, 70},
-         {x86_64::tr1, 71},
-         {x86_64::tr2, 72},
-         {x86_64::tr3, 73},
-         {x86_64::tr4, 74},
-         {x86_64::tr5, 75},
-         {x86_64::tr6, 76},
-         {x86_64::tr7, 77} 
+         {x86_64::k0, 37},
+         {x86_64::k1, 38},
+         {x86_64::k2, 39},
+         {x86_64::k3, 40},
+         {x86_64::k4, 41},
+         {x86_64::k5, 42},
+         {x86_64::k6, 43},
+         {x86_64::k7, 44},
+         {x86_64::zmm0, 45},
+         {x86_64::zmm1, 46},
+         {x86_64::zmm2, 47},
+         {x86_64::zmm3, 48},
+         {x86_64::zmm4, 49},
+         {x86_64::zmm5, 50},
+         {x86_64::zmm6, 51},
+         {x86_64::zmm7, 52},
+         {x86_64::zmm8, 53},
+         {x86_64::zmm9, 54},
+         {x86_64::zmm10, 55},
+         {x86_64::zmm11, 56},
+         {x86_64::zmm12, 57},
+         {x86_64::zmm13, 58},
+         {x86_64::zmm14, 59},
+         {x86_64::zmm15, 60},
+         {x86_64::zmm16, 61},
+         {x86_64::zmm17, 62},
+         {x86_64::zmm18, 63},
+         {x86_64::zmm19, 64},
+         {x86_64::zmm20, 65},
+         {x86_64::zmm21, 66},
+         {x86_64::zmm22, 67},
+         {x86_64::zmm23, 68},
+         {x86_64::zmm24, 69},
+         {x86_64::zmm25, 70},
+         {x86_64::zmm26, 71},
+         {x86_64::zmm27, 72},
+         {x86_64::zmm28, 73},
+         {x86_64::zmm29, 74},
+         {x86_64::zmm30, 75},
+         {x86_64::zmm31, 76},
+         {x86_64::ymm0, 77},
+         {x86_64::ymm1, 78},
+         {x86_64::ymm2, 79},
+         {x86_64::ymm3, 80},
+         {x86_64::ymm4, 81},
+         {x86_64::ymm5, 82},
+         {x86_64::ymm6, 83},
+         {x86_64::ymm7, 84},
+         {x86_64::ymm8, 85},
+         {x86_64::ymm9, 86},
+         {x86_64::ymm10, 87},
+         {x86_64::ymm11, 88},
+         {x86_64::ymm12, 89},
+         {x86_64::ymm13, 90},
+         {x86_64::ymm14, 91},
+         {x86_64::ymm15, 92},
+         {x86_64::ymm16, 93},
+         {x86_64::ymm17, 94},
+         {x86_64::ymm18, 95},
+         {x86_64::ymm19, 96},
+         {x86_64::ymm20, 97},
+         {x86_64::ymm21, 98},
+         {x86_64::ymm22, 99},
+         {x86_64::ymm23, 100},
+         {x86_64::ymm24, 101},
+         {x86_64::ymm25, 102},
+         {x86_64::ymm26, 103},
+         {x86_64::ymm27, 104},
+         {x86_64::ymm28, 105},
+         {x86_64::ymm29, 106},
+         {x86_64::ymm30, 107},
+         {x86_64::ymm31, 108},
+         {x86_64::xmm0, 109},
+         {x86_64::xmm1, 110},
+         {x86_64::xmm2, 111},
+         {x86_64::xmm3, 112},
+         {x86_64::xmm4, 113},
+         {x86_64::xmm5, 114},
+         {x86_64::xmm6, 115},
+         {x86_64::xmm7, 116},
+         {x86_64::xmm8, 117},
+         {x86_64::xmm9, 118},
+         {x86_64::xmm10, 119},
+         {x86_64::xmm11, 120},
+         {x86_64::xmm12, 121},
+         {x86_64::xmm13, 122},
+         {x86_64::xmm14, 123},
+         {x86_64::xmm15, 124},
+         {x86_64::xmm16, 125},
+         {x86_64::xmm17, 126},
+         {x86_64::xmm18, 127},
+         {x86_64::xmm19, 128},
+         {x86_64::xmm20, 129},
+         {x86_64::xmm21, 130},
+         {x86_64::xmm22, 131},
+         {x86_64::xmm23, 132},
+         {x86_64::xmm24, 133},
+         {x86_64::xmm25, 134},
+         {x86_64::xmm26, 135},
+         {x86_64::xmm27, 136},
+         {x86_64::xmm28, 137},
+         {x86_64::xmm29, 138},
+         {x86_64::xmm30, 139},
+         {x86_64::xmm31, 140},
+         {x86_64::mm0, 141}, // mm0 to mm7 and st0 to st7 collapse to mm0
+         {x86_64::cr0, 142},
+         {x86_64::cr1, 143},
+         {x86_64::cr2, 144},
+         {x86_64::cr3, 145},
+         {x86_64::cr4, 146},
+         {x86_64::cr5, 147},
+         {x86_64::cr6, 148},
+         {x86_64::cr7, 149},
+         {x86_64::dr0, 150},
+         {x86_64::dr1, 151},
+         {x86_64::dr2, 152},
+         {x86_64::dr3, 153},
+         {x86_64::dr4, 154},
+         {x86_64::dr5, 155},
+         {x86_64::dr6, 156},
+         {x86_64::dr7, 157},
+         {x86_64::tr0, 158},
+         {x86_64::tr1, 159},
+         {x86_64::tr2, 160},
+         {x86_64::tr3, 161},
+         {x86_64::tr4, 162},
+         {x86_64::tr5, 163},
+         {x86_64::tr6, 164},
+         {x86_64::tr7, 165},
       };
    }
    return mrmap;
@@ -569,8 +754,47 @@ RegisterMap &machRegIndex_ppc_64() {
    return mrmap;
 }
 
-#else
+RegisterMap &machRegIndex_aarch64() {
+   static RegisterMap mrmap;
+   if (mrmap.empty()) {
+      mrmap = {
+	 {aarch64::x0, 0},
+	 {aarch64::x1, 1},
+	 {aarch64::x2, 2},
+	 {aarch64::x3, 3},
+	 {aarch64::x4, 4},
+	 {aarch64::x5, 5},
+	 {aarch64::x6, 6},
+	 {aarch64::x7, 7},
+	 {aarch64::x8, 8},
+	 {aarch64::x9, 9},
+	 {aarch64::x10, 10},
+	 {aarch64::x11, 11},
+	 {aarch64::x12, 12},
+	 {aarch64::x13, 13},
+	 {aarch64::x14, 14},
+	 {aarch64::x15, 15},
+	 {aarch64::x16, 16},
+	 {aarch64::x17, 17},
+	 {aarch64::x18, 18},
+	 {aarch64::x19, 19},
+	 {aarch64::x20, 20},
+	 {aarch64::x21, 21},
+	 {aarch64::x22, 22},
+	 {aarch64::x23, 23},
+	 {aarch64::x24, 24},
+	 {aarch64::x25, 25},
+	 {aarch64::x26, 26},
+	 {aarch64::x27, 27},
+	 {aarch64::x28, 28},
+	 {aarch64::x29, 29},
+	 {aarch64::x30, 30} };
+   }
+   return mrmap;
+}
 
+#else
+  // This fails on VS 2015... but not VS 2010...
 RegisterMap &machRegIndex_x86() {
    static RegisterMap mrmap;
    if (mrmap.empty()) {
@@ -688,47 +912,135 @@ RegisterMap &machRegIndex_x86_64() {
          (x86_64::orax, 34)
          (x86_64::fsbase, 35)
          (x86_64::gsbase, 36)
-         (x86_64::xmm0, 37)
-         (x86_64::xmm1, 38)
-         (x86_64::xmm2, 39)
-         (x86_64::xmm3, 40)
-         (x86_64::xmm4, 41)
-         (x86_64::xmm5, 42)
-         (x86_64::xmm6, 43)
-         (x86_64::xmm7, 44)
-         (x86_64::xmm8, 45)
-         (x86_64::xmm9, 46)
-         (x86_64::xmm10, 47)
-         (x86_64::xmm11, 48)
-         (x86_64::xmm12, 49)
-         (x86_64::xmm13, 50)
-         (x86_64::xmm14, 51)
-         (x86_64::xmm15, 52)
-         (x86_64::mm0, 53) // mm0 to mm7 and st0 to st7 collapse to mm0
-         (x86_64::cr0, 54)
-         (x86_64::cr1, 55)
-         (x86_64::cr2, 56)
-         (x86_64::cr3, 57)
-         (x86_64::cr4, 58)
-         (x86_64::cr5, 59)
-         (x86_64::cr6, 60)
-         (x86_64::cr7, 61)
-         (x86_64::dr0, 62)
-         (x86_64::dr1, 63)
-         (x86_64::dr2, 64)
-         (x86_64::dr3, 65)
-         (x86_64::dr4, 66)
-         (x86_64::dr5, 67)
-         (x86_64::dr6, 68)
-         (x86_64::dr7, 69)
-         (x86_64::tr0, 70)
-         (x86_64::tr1, 71)
-         (x86_64::tr2, 72)
-         (x86_64::tr3, 73)
-         (x86_64::tr4, 74)
-         (x86_64::tr5, 75)
-         (x86_64::tr6, 76)
-         (x86_64::tr7, 77)
+         (x86_64::k0, 37)
+         (x86_64::k1, 38)
+         (x86_64::k2, 39)
+         (x86_64::k3, 40)
+         (x86_64::k4, 41)
+         (x86_64::k5, 42)
+         (x86_64::k6, 43)
+         (x86_64::k7, 44)
+         (x86_64::zmm0, 45)
+         (x86_64::zmm1, 46)
+         (x86_64::zmm2, 47)
+         (x86_64::zmm3, 48)
+         (x86_64::zmm4, 49)
+         (x86_64::zmm5, 50)
+         (x86_64::zmm6, 51)
+         (x86_64::zmm7, 52)
+         (x86_64::zmm8, 53)
+         (x86_64::zmm9, 54)
+         (x86_64::zmm10, 55)
+         (x86_64::zmm11, 56)
+         (x86_64::zmm12, 57)
+         (x86_64::zmm13, 58)
+         (x86_64::zmm14, 59)
+         (x86_64::zmm15, 60)
+         (x86_64::zmm16, 61)
+         (x86_64::zmm17, 62)
+         (x86_64::zmm18, 63)
+         (x86_64::zmm19, 64)
+         (x86_64::zmm20, 65)
+         (x86_64::zmm21, 66)
+         (x86_64::zmm22, 67)
+         (x86_64::zmm23, 68)
+         (x86_64::zmm24, 69)
+         (x86_64::zmm25, 70)
+         (x86_64::zmm26, 71)
+         (x86_64::zmm27, 72)
+         (x86_64::zmm28, 73)
+         (x86_64::zmm29, 74)
+         (x86_64::zmm30, 75)
+         (x86_64::zmm31, 75)
+         (x86_64::ymm0, 76)
+         (x86_64::ymm1, 77)
+         (x86_64::ymm2, 78)
+         (x86_64::ymm3, 79)
+         (x86_64::ymm4, 80)
+         (x86_64::ymm5, 81)
+         (x86_64::ymm6, 82)
+         (x86_64::ymm7, 83)
+         (x86_64::ymm8, 84)
+         (x86_64::ymm9, 85)
+         (x86_64::ymm10, 86)
+         (x86_64::ymm11, 87)
+         (x86_64::ymm12, 88)
+         (x86_64::ymm13, 89)
+         (x86_64::ymm14, 90)
+         (x86_64::ymm15, 91)
+         (x86_64::ymm16, 92)
+         (x86_64::ymm17, 93)
+         (x86_64::ymm18, 94)
+         (x86_64::ymm19, 95)
+         (x86_64::ymm20, 96)
+         (x86_64::ymm21, 97)
+         (x86_64::ymm22, 98)
+         (x86_64::ymm23, 99)
+         (x86_64::ymm24, 100)
+         (x86_64::ymm25, 101)
+         (x86_64::ymm26, 102)
+         (x86_64::ymm27, 103)
+         (x86_64::ymm28, 104)
+         (x86_64::ymm29, 105)
+         (x86_64::ymm30, 106)
+         (x86_64::ymm31, 107)
+         (x86_64::xmm0, 108)
+         (x86_64::xmm1, 109)
+         (x86_64::xmm2, 110)
+         (x86_64::xmm3, 111)
+         (x86_64::xmm4, 112)
+         (x86_64::xmm5, 113)
+         (x86_64::xmm6, 114)
+         (x86_64::xmm7, 115)
+         (x86_64::xmm8, 116)
+         (x86_64::xmm9, 117)
+         (x86_64::xmm10, 118)
+         (x86_64::xmm11, 119)
+         (x86_64::xmm12, 120)
+         (x86_64::xmm13, 121)
+         (x86_64::xmm14, 122)
+         (x86_64::xmm15, 123)
+         (x86_64::xmm16, 124)
+         (x86_64::xmm17, 125)
+         (x86_64::xmm18, 126)
+         (x86_64::xmm19, 127)
+         (x86_64::xmm20, 128)
+         (x86_64::xmm21, 129)
+         (x86_64::xmm22, 130)
+         (x86_64::xmm23, 131)
+         (x86_64::xmm24, 132)
+         (x86_64::xmm25, 133)
+         (x86_64::xmm26, 134)
+         (x86_64::xmm27, 135)
+         (x86_64::xmm28, 136)
+         (x86_64::xmm29, 137)
+         (x86_64::xmm30, 138)
+         (x86_64::xmm31, 139)
+         (x86_64::mm0, 140) // mm0 to mm7 and st0 to st7 collapse to mm0
+         (x86_64::cr0, 141)
+         (x86_64::cr1, 142)
+         (x86_64::cr2, 143)
+         (x86_64::cr3, 144)
+         (x86_64::cr4, 145)
+         (x86_64::cr5, 146)
+         (x86_64::cr6, 147)
+         (x86_64::cr7, 148)
+         (x86_64::dr0, 149)
+         (x86_64::dr1, 150)
+         (x86_64::dr2, 151)
+         (x86_64::dr3, 152)
+         (x86_64::dr4, 153)
+         (x86_64::dr5, 154)
+         (x86_64::dr6, 155)
+         (x86_64::dr7, 156)
+         (x86_64::tr0, 157)
+         (x86_64::tr1, 158)
+         (x86_64::tr2, 159)
+         (x86_64::tr3, 160)
+         (x86_64::tr4, 161)
+         (x86_64::tr5, 162)
+         (x86_64::tr6, 163)
+         (x86_64::tr7, 164)
          ;
    }
    return mrmap;
@@ -1090,6 +1402,45 @@ RegisterMap &machRegIndex_ppc_64() {
          (ppc64::sprg7_ro, 163);
    }
    return mrmap;
+}
+
+RegisterMap &machRegIndex_aarch64() {
+   static RegisterMap mrmap;
+   if (mrmap.empty()) {
+      mrmap =  map_list_of
+		(aarch64::x0, 0)
+        (aarch64::x1, 1)
+        (aarch64::x2, 2)
+        (aarch64::x3, 3)
+        (aarch64::x4, 4)
+        (aarch64::x5, 5)
+        (aarch64::x6, 6)
+        (aarch64::x7, 7)
+        (aarch64::x8, 8)
+        (aarch64::x9, 9)
+        (aarch64::x10, 10)
+        (aarch64::x11, 11)
+        (aarch64::x12, 12)
+        (aarch64::x13, 13)
+        (aarch64::x14, 14)
+        (aarch64::x15, 15)
+        (aarch64::x16, 16)
+        (aarch64::x17, 17)
+        (aarch64::x18, 18)
+        (aarch64::x19, 19)
+        (aarch64::x20, 20)
+        (aarch64::x21, 21)
+        (aarch64::x22, 22)
+        (aarch64::x23, 23)
+        (aarch64::x24, 24)
+        (aarch64::x25, 25)
+        (aarch64::x26, 26)
+        (aarch64::x27, 27)
+        (aarch64::x28, 28)
+        (aarch64::x29, 29)
+        (aarch64::x30, 30);
+	 }
+	return mrmap;
 }
 
 #endif

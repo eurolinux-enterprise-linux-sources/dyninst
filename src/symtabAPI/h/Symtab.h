@@ -42,13 +42,32 @@
 #include "ProcReader.h"
 #include "IBSTree.h"
 
+#include "version.h"
+
 #include "boost/shared_ptr.hpp"
+#include "boost/multi_index_container.hpp"
+#include <boost/multi_index/member.hpp>
+#include <boost/multi_index/mem_fun.hpp>
+#include <boost/multi_index/ordered_index.hpp>
+#include <boost/multi_index/hashed_index.hpp>
+#include <boost/multi_index/identity.hpp>
+#include <boost/multi_index/random_access_index.hpp>
+using boost::multi_index_container;
+using boost::multi_index::indexed_by;
+using boost::multi_index::ordered_unique;
+using boost::multi_index::ordered_non_unique;
+using boost::multi_index::hashed_non_unique;
+
+using boost::multi_index::identity;
+using boost::multi_index::tag;
+using boost::multi_index::const_mem_fun;
+using boost::multi_index::member;
 
 class MappedFile;
 
-#define SYM_MAJOR 8
-#define SYM_MINOR 2
-#define SYM_BETA  0
+#define SYM_MAJOR DYNINST_MAJOR_VERSION
+#define SYM_MINOR DYNINST_MINOR_VERSION
+#define SYM_BETA  DYNINST_PATCH_VERSION
  
 namespace Dyninst {
 
@@ -67,6 +86,7 @@ class Type;
 class FunctionBase;
 class FuncRange;
 
+typedef IBSTree< ModRange > ModRangeLookup;
 typedef IBSTree<FuncRange> FuncRangeLookup;
 typedef Dyninst::ProcessReader MemRegReader;
 
@@ -80,8 +100,6 @@ class SYMTAB_EXPORT Symtab : public LookupInterface,
    friend class Variable;
    friend class Module;
    friend class Region;
-   friend class emitElf;
-   friend class emitElf64;
    friend class emitElfStatic;
    friend class emitWin;
    friend class Aggregate;
@@ -112,16 +130,7 @@ class SYMTAB_EXPORT Symtab : public LookupInterface,
    static Symtab *findOpenSymtab(std::string filename);
    static bool closeSymtab(Symtab *);
 
-   Serializable * serialize_impl(SerializerBase *sb, 
-		   const char *tag = "Symtab") THROW_SPEC (SerializerError);
-   void rebuild_symbol_hashes(SerializerBase *);
-   void rebuild_funcvar_hashes(SerializerBase *);
-   void rebuild_module_hashes(SerializerBase *);
-   void rebuild_region_indexes(SerializerBase *) THROW_SPEC(SerializerError);
-   static bool setup_module_up_ptrs(SerializerBase *,Symtab *st);
-   static bool fixup_relocation_symbols(SerializerBase *,Symtab *st);
-
-   bool exportXML(std::string filename);
+    bool exportXML(std::string filename);
    bool exportBin(std::string filename);
    static Symtab *importBin(std::string filename);
    bool getRegValueAtFrame(Address pc, 
@@ -148,7 +157,7 @@ class SYMTAB_EXPORT Symtab : public LookupInterface,
    virtual bool getAllSymbolsByType(std::vector<Symbol *> &ret, 
          Symbol::SymbolType sType);
 
-   std::vector<Symbol *> *findSymbolByOffset(Offset);
+   std::vector<Symbol *> findSymbolByOffset(Offset);
 
    // Return all undefined symbols in the binary. Currently used for finding
    // the .o's in a static archive that have definitions of these symbols
@@ -182,7 +191,8 @@ class SYMTAB_EXPORT Symtab : public LookupInterface,
    // Module
 
    bool getAllModules(std::vector<Module *>&ret);
-   bool findModuleByOffset(Module *&ret, Offset off);
+   bool findModuleByOffset(std::set<Module *>& ret, Offset off);
+   bool findModuleByOffset(Module *& ret, Offset off);
    bool findModuleByName(Module *&ret, const std::string name);
    Module *getDefaultModule();
 
@@ -225,7 +235,7 @@ class SYMTAB_EXPORT Symtab : public LookupInterface,
    bool isExec() const;
    bool isStripped();
    ObjectType getObjectType() const;
-   Dyninst::Architecture getArchitecture();
+   Dyninst::Architecture getArchitecture() const;
    bool isCode(const Offset where) const;
    bool isData(const Offset where) const;
    bool isValidOffset(const Offset where) const;
@@ -234,11 +244,11 @@ class SYMTAB_EXPORT Symtab : public LookupInterface,
    bool getMappedRegions(std::vector<Region *> &mappedRegs) const;
 
    /***** Line Number Information *****/
-   bool getAddressRanges(std::vector<std::pair<Offset, Offset> >&ranges,
-         std::string lineSource, unsigned int LineNo);
-   bool getSourceLines(std::vector<Statement *> &lines, 
-         Offset addressInRange);
-   bool getSourceLines(std::vector<LineNoTuple> &lines, 
+   bool getAddressRanges(std::vector<AddressRange> &ranges,
+                         std::string lineSource, unsigned int LineNo);
+   bool getSourceLines(std::vector<Statement::Ptr> &lines,
+                       Offset addressInRange);
+   bool getSourceLines(std::vector<LineNoTuple> &lines,
                                      Offset addressInRange);
    bool addLine(std::string lineSource, unsigned int lineNo,
          unsigned int lineOffset, Offset lowInclAddr,
@@ -247,7 +257,8 @@ class SYMTAB_EXPORT Symtab : public LookupInterface,
          unsigned int lineNo, unsigned int lineOffset = 0);
    void setTruncateLinePaths(bool value);
    bool getTruncateLinePaths();
-
+   void forceFullLineInfoParse();
+   
    /***** Type Information *****/
    virtual bool findType(Type *&type, std::string name);
    virtual Type *findType(unsigned type_id);
@@ -318,6 +329,7 @@ class SYMTAB_EXPORT Symtab : public LookupInterface,
 
    char *mem_image() const;
 
+   Offset preferedBase() const;
    Offset imageOffset() const;
    Offset dataOffset() const;
    Offset dataLength() const;
@@ -330,6 +342,9 @@ class SYMTAB_EXPORT Symtab : public LookupInterface,
    const char*  getInterpreterName() const;
 
    unsigned getAddressWidth() const;
+   bool isBigEndianDataEncoding() const;
+   bool getABIVersion(int &major, int &minor) const;
+
    Offset getLoadOffset() const;
    Offset getEntryOffset() const;
    Offset getBaseOffset() const;
@@ -343,8 +358,8 @@ class SYMTAB_EXPORT Symtab : public LookupInterface,
 
    std::string getDefaultNamespacePrefix() const;
 
-   unsigned getNumberofRegions() const;
-   unsigned getNumberofSymbols() const;
+   unsigned getNumberOfRegions() const;
+   unsigned getNumberOfSymbols() const;
 
    std::vector<std::string> &getDependencies();
    bool removeLibraryDependency(std::string lib);
@@ -383,8 +398,8 @@ class SYMTAB_EXPORT Symtab : public LookupInterface,
    bool fixSymModule(Symbol *&sym);
    bool demangleSymbol(Symbol *&sym);
    bool addSymbolToIndices(Symbol *&sym, bool undefined);
-   bool addSymbolToAggregates(Symbol *&sym);
-   bool doNotAggregate(Symbol *&sym);
+   bool addSymbolToAggregates(const Symbol *sym);
+   bool doNotAggregate(const Symbol *sym);
    bool updateIndices(Symbol *sym, std::string newName, NameType nameType);
 
 
@@ -405,16 +420,17 @@ class SYMTAB_EXPORT Symtab : public LookupInterface,
    bool changeAggregateOffset(Aggregate *agg, Offset oldOffset, Offset newOffset);
    bool deleteAggregate(Aggregate *agg);
 
-   bool parseFunctionRanges();
    bool addFunctionRange(FunctionBase *fbase, Dyninst::Offset next_start);
 
    // Used by binaryEdit.C...
  public:
+
+
    bool canBeShared();
    Module *getOrCreateModule(const std::string &modName, 
                                            const Offset modAddr);
+   bool parseFunctionRanges();
 
- public:
    //Only valid on ELF formats
    Offset getElfDynamicOffset();
    // SymReader interface
@@ -436,6 +452,7 @@ class SYMTAB_EXPORT Symtab : public LookupInterface,
 
 
    void parseLineInformation();
+   
    void parseTypes();
    bool setDefaultNamespacePrefix(std::string &str);
 
@@ -456,6 +473,7 @@ class SYMTAB_EXPORT Symtab : public LookupInterface,
    MappedFile *mf;
    MappedFile *mfForDebugInfo;
 
+   Offset preferedBase_;
    Offset imageOffset_;
    unsigned imageLen_;
    Offset dataOffset_;
@@ -497,29 +515,28 @@ class SYMTAB_EXPORT Symtab : public LookupInterface,
    unsigned no_of_symbols;
 
    // Indices
-
-   std::vector<Symbol *> everyDefinedSymbol;
-   // hashtable for looking up undefined symbols in the dynamic symbol
-   // tale. Entries are referred by the relocation table entries
-   // NOT a subset of everyDefinedSymbol
-   std::vector<Symbol *> undefDynSyms;
-   std::map <std::string, std::vector<Symbol *> > undefDynSymsByMangledName;
-   std::map <std::string, std::vector<Symbol *> > undefDynSymsByPrettyName;
-   std::map <std::string, std::vector<Symbol *> > undefDynSymsByTypedName;
-
+   struct offset {};
+   struct pretty {};
+   struct mangled {};
+   struct typed {};
+   struct id {};
    
-   // Symbols by offsets in the symbol table
-   dyn_hash_map <Offset, std::vector<Symbol *> > symsByOffset;
-
-   // The raw name from the symbol table
-   dyn_hash_map <std::string, std::vector<Symbol *> > symsByMangledName;
-
-   // The name after we've run it through the demangler
-   dyn_hash_map <std::string, std::vector<Symbol *> > symsByPrettyName;
-
-   // The name after we've derived the parameter types
-   dyn_hash_map <std::string, std::vector<Symbol *> > symsByTypedName;
-
+ 
+   
+   
+   typedef 
+   boost::multi_index_container<Symbol::Ptr, indexed_by <
+   ordered_unique< tag<id>, const_mem_fun < Symbol::Ptr, Symbol*, &Symbol::Ptr::get> >,
+   ordered_non_unique< tag<offset>, const_mem_fun < Symbol, Offset, &Symbol::getOffset > >,
+   hashed_non_unique< tag<mangled>, const_mem_fun < Symbol, std::string, &Symbol::getMangledName > >,
+   hashed_non_unique< tag<pretty>, const_mem_fun < Symbol, std::string, &Symbol::getPrettyName > >,
+   hashed_non_unique< tag<typed>, const_mem_fun < Symbol, std::string, &Symbol::getTypedName > >
+   >
+   > indexed_symbols;
+   
+   indexed_symbols everyDefinedSymbol;
+   indexed_symbols undefDynSyms;
+   
    // We also need per-Aggregate indices
    bool sorted_everyFunction;
    std::vector<Function *> everyFunction;
@@ -531,42 +548,20 @@ class SYMTAB_EXPORT Symtab : public LookupInterface,
    std::vector<Variable *> everyVariable;
    dyn_hash_map <Offset, Variable *> varsByOffset;
 
-   // For now, skip the index-by-name structures. We can use the Symbol
-   // ones instead. 
-   /*
-   dyn_hash_map <std::string, std::vector<Function *> *> funcsByMangledName;
-   dyn_hash_map <std::string, std::vector<Function *> *> funcsByPrettyName;
-   dyn_hash_map <std::string, std::vector<Function *> *> funcsByTypedName;
-   */
 
-   //dyn_hash_map <Offset, std::vector<Function *> > funcsByEntryAddr;
-   // note, a prettyName is not unique, it may map to a function appearing
-   // in several modules.  Also only contains instrumentable functions....
-   //dyn_hash_map <std::string, std::vector<Function *>*> funcsByPretty;
-   // Hash table holding functions by mangled name.
-   // Should contain same functions as funcsByPretty....
-   //dyn_hash_map <std::string, std::vector<Function *>*> funcsByMangled;
-   // A way to iterate over all the functions efficiently
-   //std::vector<Symbol *> everyUniqueFunction;
-   //std::vector<Function *> allFunctions;
-   // And the counterpart "ones that are there right away"
-   //std::vector<Symbol *> exportedFunctions;
-
-   //dyn_hash_map <Address, Function *> funcsByAddr;
-   dyn_hash_map <std::string, Module *> modsByFileName;
-   dyn_hash_map <std::string, Module *> modsByFullName;
-   std::vector<Module *> _mods;
-
-   // Variables indexed by pretty (non-mangled) name
-   /*
-   dyn_hash_map <std::string, std::vector <Symbol *> *> varsByPretty;
-   dyn_hash_map <std::string, std::vector <Symbol *> *> varsByMangled;
-   dyn_hash_map <Offset, Symbol *> varsByAddr;
-   std::vector<Symbol *> everyUniqueVariable;
-   */
-
-   //dyn_hash_map <std::string, std::vector <Symbol *> *> modsByName;
-   //std::vector<Module *> _mods;
+    boost::multi_index_container<Module*,
+            boost::multi_index::indexed_by<
+                    boost::multi_index::random_access<>,
+                    boost::multi_index::ordered_unique<boost::multi_index::identity<Module*> >,
+                    boost::multi_index::ordered_non_unique<
+                            boost::multi_index::const_mem_fun<Module, const std::string&, &Module::fileName> >,
+                    boost::multi_index::ordered_non_unique<
+                            boost::multi_index::const_mem_fun<Module, const std::string&, &Module::fullName> >
+//                    boost::multi_index::ordered_non_unique<
+//                            boost::multi_index::const_mem_fun<Module, Module::DebugInfoT, &Module::getDebugInfo> >
+                    >
+            >
+            indexed_modules;
 
 
    std::vector<relocationEntry > relocation_table_;
@@ -581,8 +576,6 @@ class SYMTAB_EXPORT Symtab : public LookupInterface,
    bool getExplicitSymtabRefs(std::set<Symtab *> &refs);
    std::set<Symtab *> explicitSymtabRefs_;
 
-   //Line Information valid flag;
-   bool isLineInfoValid_;
    //type info valid flag
    bool isTypeInfoValid_;
 
@@ -606,13 +599,14 @@ class SYMTAB_EXPORT Symtab : public LookupInterface,
    bool isDefensiveBinary_;
 
    FuncRangeLookup *func_lookup;
-
-   // Line information map from module name to line info
-   dyn_hash_map<std::string, LineInformation> *lineInfo;
+    ModRangeLookup *mod_lookup_;
 
    //Don't use obj_private, use getObject() instead.
  public:
    Object *getObject();
+   const Object *getObject() const;
+   ModRangeLookup* mod_lookup();
+
  private:
    Object *obj_private;
 
@@ -748,47 +742,9 @@ class SYMTAB_EXPORT relocationEntry : public Serializable, public AnnotatableSpa
       Offset rel_struct_addr_;
 };
 
-#if 1
-#if 1
 SYMTAB_EXPORT SerializerBase *nonpublic_make_bin_symtab_serializer(Symtab *t, std::string file);
 SYMTAB_EXPORT SerializerBase *nonpublic_make_bin_symtab_deserializer(Symtab *t, std::string file);
 SYMTAB_EXPORT void nonpublic_free_bin_symtab_serializer(SerializerBase *sb);
-#else
-
-template <class T>
-SerializerBase *nonpublic_make_bin_serializer(T *t, std::string file)
-{
-	SerializerBin<T> *ser;
-	ser = new SerializerBin<T>(t, "SerializerBin", file, sd_serialize, true);
-	T *test_st = ser->getScope();
-	assert(test_st == t);
-	return ser;
-}
-
-template <class T>
-SerializerBase *nonpublic_make_bin_deserializer(T *t, std::string file)
-{
-	SerializerBin<T> *ser;
-	ser = new SerializerBin<T>(t, "DeserializerBin", file, sd_deserialize, true);
-	T *test_st = ser->getScope();
-	assert(test_st == t);
-	return ser;
-}
-
-template <class T>
-void nonpublic_free_bin_serializer(SerializerBase *sb)
-{
-	SerializerBin<T> *sbin = dynamic_cast<SerializerBin<T> *>(sb);
-	if (sbin)
-	{
-		delete(sbin);
-	}
-	else
-		fprintf(stderr, "%s[%d]:  FIXME\n", FILE__, __LINE__);
-
-}
-#endif
-#endif
 
 }//namespace SymtabAPI
 

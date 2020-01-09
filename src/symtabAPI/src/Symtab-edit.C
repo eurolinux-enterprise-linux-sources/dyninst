@@ -135,39 +135,9 @@ bool Symtab::deleteAggregate(Aggregate *agg) {
 }
 
 bool Symtab::deleteSymbolFromIndices(Symbol *sym) {
-    // Remove from global indices
-    std::vector<Symbol *>::iterator iter;
-
-    // everyDefinedSymbol
-    for (iter = everyDefinedSymbol.begin(); iter != everyDefinedSymbol.end(); iter++) 
-    {
-        //  we use indexes in this vector as a unique id for symbols, so mark
-        //  as deleted w/out changing vector
-        if ((*iter) == sym) (*iter) = &deletedSymbol;
-    }
-    undefDynSymsByMangledName[sym->getMangledName()].erase(std::remove(undefDynSymsByMangledName[sym->getMangledName()].begin(),
-                                                                       undefDynSymsByMangledName[sym->getMangledName()].end(), sym),
-                                                           undefDynSymsByMangledName[sym->getMangledName()].end());
-    undefDynSymsByPrettyName[sym->getPrettyName()].erase(std::remove(undefDynSymsByPrettyName[sym->getPrettyName()].begin(),
-                                                                       undefDynSymsByPrettyName[sym->getPrettyName()].end(), sym),
-                                                         undefDynSymsByPrettyName[sym->getPrettyName()].end());
-    undefDynSymsByTypedName[sym->getTypedName()].erase(std::remove(undefDynSymsByTypedName[sym->getTypedName()].begin(),
-                                                                       undefDynSymsByTypedName[sym->getTypedName()].end(), sym),
-                                                           undefDynSymsByTypedName[sym->getTypedName()].end());
-    undefDynSyms.erase(std::remove(undefDynSyms.begin(), undefDynSyms.end(), sym), undefDynSyms.end());
-
-    symsByOffset[sym->getOffset()].erase(std::remove(symsByOffset[sym->getOffset()].begin(), symsByOffset[sym->getOffset()].end(),
-                                                     sym), symsByOffset[sym->getOffset()].end());
-    symsByMangledName[sym->getMangledName()].erase(std::remove(symsByMangledName[sym->getMangledName()].begin(),
-                                                               symsByMangledName[sym->getMangledName()].end(), sym),
-                                                   symsByMangledName[sym->getMangledName()].end());
-    symsByPrettyName[sym->getPrettyName()].erase(std::remove(symsByPrettyName[sym->getPrettyName()].begin(),
-                                                             symsByPrettyName[sym->getPrettyName()].end(), sym),
-                                                 symsByPrettyName[sym->getPrettyName()].end());
-    symsByTypedName[sym->getTypedName()].erase(std::remove(symsByTypedName[sym->getTypedName()].begin(),
-                                                           symsByTypedName[sym->getTypedName()].end(), sym),
-                                               symsByTypedName[sym->getTypedName()].end());
-    return true;
+  everyDefinedSymbol.erase(sym);
+  undefDynSyms.erase(sym);
+  return true;
 }
 
 bool Symtab::deleteSymbol(Symbol *sym)
@@ -186,8 +156,22 @@ bool Symtab::changeSymbolOffset(Symbol *sym, Offset newOffset) {
     // do that and update funcsByOffset or varsByOffset.
     // If we are and not the only symbol, do 1), remove from 
     // the aggregate, and make a new aggregate.
-
-    Offset oldOffset = sym->offset_;
+  typedef indexed_symbols::index<offset>::type syms_by_off;
+  syms_by_off& defindex = everyDefinedSymbol.get<offset>();
+  syms_by_off::iterator found = defindex.find(sym->offset_);
+  while(found != defindex.end() && 
+	(*found)->getOffset() == sym->offset_)
+  {
+    if(*found == sym) 
+    {
+      sym->offset_ = newOffset;
+      defindex.replace(found, sym);
+      break;
+    }
+  }
+  
+  
+  /*    Offset oldOffset = sym->offset_;
     std::vector<Symbol *>::iterator iter;
     for (iter = symsByOffset[oldOffset].begin();
          iter != symsByOffset[oldOffset].end();
@@ -199,6 +183,7 @@ bool Symtab::changeSymbolOffset(Symbol *sym, Offset newOffset) {
     }
     sym->offset_ = newOffset;
     symsByOffset[newOffset].push_back(sym);
+  */
 
     if (sym->aggregate_ == NULL) return true;
     else 
@@ -243,13 +228,7 @@ bool Symtab::addSymbol(Symbol *newSym, Symbol *referringSymbol)
         newSym->setVersionFileName(filename);
         std::string rstr;
 
-        bool ret = newSym->getVersionFileName(rstr);
-        if (!ret) 
-        {
-           fprintf(stderr, "%s[%d]:  failed to getVersionFileName(%s)\n", 
-                 FILE__, __LINE__, rstr.c_str());
-        }
-
+        newSym->getVersionFileName(rstr);
         if (referringSymbol->getVersions(vers) && vers != NULL && vers->size() > 0) 
         {
             newSymVers->push_back((*vers)[0]);
@@ -297,8 +276,6 @@ Function *Symtab::createFunction(std::string name,
     Region *reg = NULL;
     
     if (!findRegion(reg, ".text") && !isDefensiveBinary()) {
-        assert(0 && "could not find text region");
-        fprintf(stderr, "%s[%d]:  could not find text region\n", FILE__, __LINE__);
         return NULL;
     }
     
@@ -307,8 +284,6 @@ Function *Symtab::createFunction(std::string name,
     }
 
     if (!reg) {
-        fprintf(stderr, "%s[%d]:  could not find region for func at %lx\n", 
-                FILE__, __LINE__,offset);
         return NULL;
     }
     
@@ -318,26 +293,18 @@ Function *Symtab::createFunction(std::string name,
     }
 
     // Check to see if we contain this module...
-    bool found = false;
-    for (unsigned i = 0; i < _mods.size(); i++) {
-        if (_mods[i] == mod) {
-            found = true;
-            break;
-        }
-    }
-    if (!found) {
-        fprintf(stderr, "Mod is %p/%s\n",
-                mod, mod->fileName().c_str());
-        for (unsigned i = 0; i < _mods.size(); i++) {
-            fprintf(stderr, "Matched against %p/%s\n",
-                    _mods[i], _mods[i]->fileName().c_str());
-        }
-        fprintf(stderr, "This %p; mod symtab %p\n",
-                this, mod->exec());
-
-        assert(0 && "passed invalid module\n");
-        return NULL;
-    }
+    if(indexed_modules.get<1>().find(mod) == indexed_modules.get<1>().end()) return NULL;
+//
+//    bool found = false;
+//    for (unsigned i = 0; i < indexed_modules.size(); i++) {
+//        if (indexed_modules[i] == mod) {
+//            found = true;
+//            break;
+//        }
+//    }
+//    if (!found) {
+//        return NULL;
+//    }
     
     Symbol *statSym = new Symbol(name, 
                                  Symbol::ST_FUNCTION, 
@@ -361,15 +328,11 @@ Function *Symtab::createFunction(std::string name,
                                 false);
 
     if (!addSymbol(statSym) || !addSymbol(dynSym)) {
-        assert(0 && "failed to add symbol\n");
-        fprintf(stderr, "%s[%d]:  symtab failed to addSymbol\n", FILE__, __LINE__);
         return NULL;
     }
     
     Function *func = statSym->getFunction();
     if (!func) {		
-        assert(0 && "failed aggregate creation");
-        fprintf(stderr, "%s[%d]:  symtab failed to create function\n", FILE__, __LINE__);
         return NULL;
     }
     
@@ -384,30 +347,23 @@ Variable *Symtab::createVariable(std::string name,
                                  Module *mod)
 {
     Region *reg = NULL;
-#if 0    
-    if (!findRegion(reg, ".data") {
-        fprintf(stderr, "%s[%d]:  could not find %s region\n", FILE__, __LINE__, regionName.c_str());
-        return NULL;
-    }
-    
-    if (!reg) {
-        fprintf(stderr, "%s[%d]:  could not find data region\n", FILE__, __LINE__);
-        return NULL;
-    }
-#endif    
     // Let's get the module hammered out. 
     if (mod == NULL) {
         mod = getDefaultModule();
     }
     // Check to see if we contain this module...
-    bool found = false;
-    for (unsigned i = 0; i < _mods.size(); i++) {
-        if (_mods[i] == mod) {
-            found = true;
-            break;
-        }
-    }
-    if (!found) return NULL;
+    if(indexed_modules.get<1>().find(mod) == indexed_modules.get<1>().end()) return NULL;
+//
+//    bool found = false;
+//    for (unsigned i = 0; i < indexed_modules.size(); i++) {
+//        if (indexed_modules[i] == mod) {
+//            found = true;
+//            break;
+//        }
+//    }
+//    if (!found) {
+//        return NULL;
+//    }
     
     Symbol *statSym = new Symbol(name, 
                                  Symbol::ST_OBJECT, 
@@ -434,13 +390,11 @@ Variable *Symtab::createVariable(std::string name,
     dynSym->setModule(mod);
 
     if (!addSymbol(statSym) || !addSymbol(dynSym)) {
-        fprintf(stderr, "%s[%d]:  symtab failed to addSymbol\n", FILE__, __LINE__);
         return NULL;
     }
     
     Variable *var = statSym->getVariable();
     if (!var) {		
-        fprintf(stderr, "%s[%d]:  symtab failed to create var\n", FILE__, __LINE__);
         return NULL;
     }
     

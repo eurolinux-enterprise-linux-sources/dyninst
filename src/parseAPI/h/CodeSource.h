@@ -54,7 +54,7 @@ class CFGModifier;
 **/
 
 
-class PARSER_EXPORT CodeRegion : public Dyninst::InstructionSource, public Dyninst::interval<Address> {
+class PARSER_EXPORT CodeRegion : public Dyninst::InstructionSource, public Dyninst::SimpleInterval<Address> {
  public:
 
     /* Fills a vector with any names associated with the function at at 
@@ -63,7 +63,7 @@ class PARSER_EXPORT CodeRegion : public Dyninst::InstructionSource, public Dynin
 
        Optional
     */
-    virtual void names(Address, vector<std::string> &) { return; }
+    virtual void names(Address, std::vector<std::string> &) { return; }
 
     /* Finds the exception handler block for a given address
        in the region.
@@ -74,14 +74,21 @@ class PARSER_EXPORT CodeRegion : public Dyninst::InstructionSource, public Dynin
     { return false; }
 
     /** interval implementation **/
-    Address low() const =0;
-    Address high() const =0;
+    virtual Address low() const =0;
+    virtual Address high() const =0;
 
     bool contains(Address) const;
 
     virtual bool wasUserAdded() const { return false; }
 
 };
+
+template <typename OS>
+ OS& operator<< (OS& stream, const CodeRegion& cr)
+ {
+     stream << "[" << cr.low() << ", " << cr.high() << ")";
+     return stream;
+ }
 
 /* A starting point for parsing */
 struct Hint {
@@ -92,6 +99,10 @@ struct Hint {
     Address _addr;
     CodeRegion * _reg;
     std::string _name;
+
+    bool operator < (const Hint &h) const {
+        return _addr < h._addr;
+    }
 };
 
 class PARSER_EXPORT CodeSource : public Dyninst::InstructionSource {
@@ -136,7 +147,14 @@ class PARSER_EXPORT CodeSource : public Dyninst::InstructionSource {
      * without hints.
      */
     std::vector<Hint> _hints;
-    
+
+    /*
+     * Lists of known non-returning functions (by name)
+     * and syscalls (by number)
+     */
+    static dyn_hash_map<std::string, bool> non_returning_funcs;
+    static dyn_hash_map<int, bool> non_returning_syscalls_x86;
+    static dyn_hash_map<int, bool> non_returning_syscalls_x86_64;
 
  public:
     /* Returns true if the function at an address is known to be
@@ -145,7 +163,8 @@ class PARSER_EXPORT CodeSource : public Dyninst::InstructionSource {
        Optional.
     */
     virtual bool nonReturning(Address /*func_entry*/) { return false; }
-    virtual bool nonReturning(std::string /* func_name */) { return false; }
+    bool nonReturning(std::string func_name);
+    virtual bool nonReturningSyscall(int /*number*/) { return false; }
 
     /*
      * If the binary file type supplies non-zero base
@@ -157,7 +176,7 @@ class PARSER_EXPORT CodeSource : public Dyninst::InstructionSource {
     std::map< Address, std::string > & linkage() const { return _linkage; }
     std::vector< Hint > const& hints() const { return _hints; } 
     std::vector<CodeRegion *> const& regions() const { return _regions; }
-    int findRegions(Address addr, set<CodeRegion *> & ret) const;
+    int findRegions(Address addr, std::set<CodeRegion *> & ret) const;
     bool regionsOverlap() const { return _regions_overlap; }
 
     Address getTOC() const { return _table_of_contents; }
@@ -174,7 +193,9 @@ class PARSER_EXPORT CodeSource : public Dyninst::InstructionSource {
     virtual void incrementCounter(const std::string& /*name*/) const { return; } 
     virtual void addCounter(const std::string& /*name*/, int /*num*/) const { return; }
     virtual void decrementCounter(const std::string& /*name*/) const { return; }
-    
+    virtual void startTimer(const std::string& /*name*/) const { return; } 
+    virtual void stopTimer(const std::string& /*name*/) const { return; }
+   
  protected:
     CodeSource() : _regions_overlap(false),
                    _table_of_contents(0) {}
@@ -196,11 +217,12 @@ class PARSER_EXPORT SymtabCodeRegion : public CodeRegion {
  private:
     SymtabAPI::Symtab * _symtab;
     SymtabAPI::Region * _region;
+    std::map<Address, Address> knownData;
  public:
     SymtabCodeRegion(SymtabAPI::Symtab *, SymtabAPI::Region *);
     ~SymtabCodeRegion();
 
-    void names(Address, vector<std::string> &);
+    void names(Address, std::vector<std::string> &);
     bool findCatchBlock(Address addr, Address & catchStart);
 
     /** InstructionSource implementation **/
@@ -210,6 +232,7 @@ class PARSER_EXPORT SymtabCodeRegion : public CodeRegion {
     unsigned int getAddressWidth() const;
     bool isCode(const Address) const;
     bool isData(const Address) const;
+    bool isReadOnly(const Address) const;
     Address offset() const;
     Address length() const;
     Architecture getArch() const;
@@ -227,8 +250,6 @@ class PARSER_EXPORT SymtabCodeSource : public CodeSource {
     bool owns_symtab;
     mutable CodeRegion * _lookup_cache;
 
-    static dyn_hash_map<std::string, bool> non_returning_funcs;
-    
     // Stats information
     StatContainer * stats_parse;
     bool _have_stats;
@@ -248,7 +269,7 @@ class PARSER_EXPORT SymtabCodeSource : public CodeSource {
     ~SymtabCodeSource();
 
     bool nonReturning(Address func_entry);
-    bool nonReturning(std::string func_name);
+    bool nonReturningSyscall(int num);
 
     bool resizeRegion(SymtabAPI::Region *, Address newDiskSize);
 
@@ -264,6 +285,7 @@ class PARSER_EXPORT SymtabCodeSource : public CodeSource {
     unsigned int getAddressWidth() const;
     bool isCode(const Address) const;
     bool isData(const Address) const;
+    bool isReadOnly(const Address) const;
     Address offset() const;
     Address length() const;
     Architecture getArch() const;
@@ -280,6 +302,8 @@ class PARSER_EXPORT SymtabCodeSource : public CodeSource {
     void incrementCounter(const std::string& name) const;
     void addCounter(const std::string& name, int num) const; 
     void decrementCounter(const std::string& name) const;
+    void startTimer(const std::string& /*name*/) const; 
+    void stopTimer(const std::string& /*name*/) const;
 
  private:
     void init(hint_filt *, bool);

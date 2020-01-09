@@ -43,6 +43,8 @@
 #include "linux.h"
 #include <dlfcn.h>
 
+#include "boost/shared_ptr.hpp"
+
 #include "pcEventMuxer.h"
 
 #include "common/src/headers.h"
@@ -176,7 +178,6 @@ bool BinaryEdit::getResolvedLibraryPath(const string &filename, std::vector<stri
     char *libPathStr, *libPath;
     std::vector<string> libPaths;
     struct stat dummy;
-    FILE *ldconfig;
     char buffer[512];
     char *pos, *key, *val;
 
@@ -218,9 +219,13 @@ bool BinaryEdit::getResolvedLibraryPath(const string &filename, std::vector<stri
     }
 
     // search ld.so.cache
-    ldconfig = popen("/sbin/ldconfig -p", "r");
+    // apparently ubuntu doesn't like pclosing NULL, so a shared pointer custom
+    // destructor is out. Ugh.
+    FILE* ldconfig = popen("/sbin/ldconfig -p", "r");
     if (ldconfig) {
-        fgets(buffer, 512, ldconfig);	// ignore first line
+        if(!fgets(buffer, 512, ldconfig)) {	// ignore first line
+          return false;
+        }
         while (fgets(buffer, 512, ldconfig) != NULL) {
             pos = buffer;
             while (*pos == ' ' || *pos == '\t') pos++;

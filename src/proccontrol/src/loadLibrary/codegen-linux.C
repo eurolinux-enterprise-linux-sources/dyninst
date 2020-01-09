@@ -22,7 +22,6 @@ static const int DLOPEN_MODE = RTLD_NOW | RTLD_GLOBAL;
 static const char DL_OPEN_FUNC_EXPORTED[] = "dlopen";
 static const char DL_OPEN_LIBC_FUNC_EXPORTED[] = "__libc_dlopen_mode";
 static const char DL_OPEN_FUNC_NAME[] = "do_dlopen";
-static const char DL_OPEN_FUNC_INTERNAL[] = "_dl_open";
 
 
 bool Codegen::generateInt() {
@@ -170,18 +169,3 @@ bool Codegen::generateStackUnprotect(Address var_addr, Address mprotect_addr) {
    return generateCall(mprotect_addr, args);
 }
 
-#if 0
-
-bool Codegen::findTOC(Symbol *sym, Library::ptr lib) {
-   Address baseTOC = 
-
-   return false;
-   if (proc_->getArchitecture() != Arch_ppc64) return true;
-
-
-   Address baseTOC = sym->getSymtab()->getTOCoffset(sym->getOffset());
-   baseTOC += lib->getDataLoadAddress();
-   toc_ = baseTOC;
-   return toc_ != 0;
-}
-#endif

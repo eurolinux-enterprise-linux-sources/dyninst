@@ -37,8 +37,6 @@
 #include "instructionAPI/h/Register.h"
 #include "instructionAPI/h/Instruction.h"
 
-using namespace Dyninst;
-using namespace Dyninst::InstructionAPI;
 #include "dataflowAPI/h/liveness.h"
 #include "dataflowAPI/h/ABI.h"
 #include <boost/bind.hpp>
@@ -47,7 +45,10 @@ std::string regs1 = " ttttttttddddddddcccccccmxxxxxxxxxxxxxxxxgf                
 std::string regs2 = " rrrrrrrrrrrrrrrrrrrrrrrm1111110000000000ssoscgfedrnoditszapci11111100dsbsbdca";
 std::string regs3 = " 7654321076543210765432105432109876543210bbrssssssftfffffffffp54321098iippxxxx";
 
+using namespace std;
+using namespace Dyninst;
 using namespace Dyninst::ParseAPI;
+using namespace Dyninst::InstructionAPI;
 
 // Code for register liveness detection
 
@@ -126,6 +127,7 @@ void LivenessAnalyzer::summarizeBlockLivenessInfo(Function* func, Block *block, 
    if (blockLiveInfo.find(block) != blockLiveInfo.end()){
    	return;
    }
+   liveness_printf("\tsummarize block info at block %lx\n", block->start());
  
    livenessData &data = blockLiveInfo[block];
    data.use = data.def = data.in = abi->getBitArray();
@@ -217,6 +219,8 @@ bool LivenessAnalyzer::updateBlockLivenessInfo(Block* block, bitArray &allRegsDe
 
 void LivenessAnalyzer::analyze(Function *func) {
     if (liveFuncCalculated.find(func) != liveFuncCalculated.end()) return;
+    liveness_printf("Caculate basic block level liveness information for function %s (%lx)\n", func->name().c_str(), func->addr());
+
     // Step 0: initialize the "registers this function has defined" bitarray
     assert(funcRegsDefined.find(func) == funcRegsDefined.end());
     // Let's assume the regs that are normally live at the entry to a function
@@ -411,7 +415,9 @@ bool LivenessAnalyzer::query(Location loc, Type type, bitArray &bitarray) {
 bool LivenessAnalyzer::query(Location loc, Type type, const MachRegister& machReg, bool &live){
 	bitArray liveRegs;
 	if (query(loc, type, liveRegs)){
-		live = liveRegs[getIndex(machReg)];
+        int index = getIndex(machReg);
+        assert(index >= 0);
+		live = liveRegs[index];
 		return true;
 	}
 	return false;
@@ -439,6 +445,7 @@ ReadWriteInfo LivenessAnalyzer::calcRWSets(Instruction::Ptr curInsn, Block* blk,
     if (cur.getArchitecture() == Arch_ppc64)
 	cur = MachRegister((cur.val() & ~Arch_ppc64) | Arch_ppc32);
     liveness_printf("\t%s \n", cur.name().c_str());
+#if defined(x86_64) || defined(x86)
     MachRegister base = cur.getBaseRegister();
     if (cur == x86::flags || cur == x86_64::flags){
       if (width == 4){
@@ -466,8 +473,11 @@ ReadWriteInfo LivenessAnalyzer::calcRWSets(Instruction::Ptr curInsn, Block* blk,
     }
     else{
       base = changeIfMMX(base);
-      ret.read[getIndex(base)] = true;
+      int index = getIndex(base);
+      assert(index >= 0);
+      ret.read[index] = true;
     }
+#endif
   }
   liveness_printf("Write Registers: \n"); 
   for (std::set<RegisterAST::Ptr>::const_iterator i = cur_written.begin(); 
@@ -476,6 +486,7 @@ ReadWriteInfo LivenessAnalyzer::calcRWSets(Instruction::Ptr curInsn, Block* blk,
     if (cur.getArchitecture() == Arch_ppc64)
 	cur = MachRegister((cur.val() & ~Arch_ppc64) | Arch_ppc32);
     liveness_printf("\t%s \n", cur.name().c_str());
+#if defined(x86_64) || defined(x86)
     MachRegister base = cur.getBaseRegister();
     if (cur == x86::flags || cur == x86_64::flags){
       if (width == 4){
@@ -503,9 +514,12 @@ ReadWriteInfo LivenessAnalyzer::calcRWSets(Instruction::Ptr curInsn, Block* blk,
     }
     else{
       base = changeIfMMX(base);
-      ret.written[getIndex(base)] = true;
-      if ((cur != base && cur.size() < 4) || isMMX(base)) ret.read[getIndex(base)] = true;
+      int index = getIndex(base);
+      assert(index >= 0);
+      ret.written[index] = true;
+      if ((cur != base && cur.size() < 4) || isMMX(base)) ret.read[index] = true;
     }
+#endif
   }
   InsnCategory category = curInsn->getCategory();
   switch(category)

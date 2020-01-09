@@ -64,7 +64,6 @@ Variable::Variable() :
 }
 void Variable::setType(Type *type)
 {
-	//fprintf(stderr, "%s[%d]:  setting variable %s to type id %d\n", FILE__, __LINE__, prettyName.c_str(), type ? type->getID() : 0xdeadbeef);
 	type_ = type;
 }
 
@@ -77,7 +76,6 @@ Type* Variable::getType()
 #if !defined(SERIALIZATION_DISABLED)
 Serializable *Variable::serialize_impl(SerializerBase *sb, const char *tag) THROW_SPEC (SerializerError)
 {
-	//fprintf(stderr, "%s[%d]:  welcome to Variable::serialize\n", FILE__, __LINE__);
 	if (!sb)
 	{
 		SER_ERR("bad paramater sb");
@@ -118,12 +116,7 @@ Serializable *Variable::serialize_impl(SerializerBase *sb, const char *tag) THRO
 
 			if (!ssb)
 			{
-				fprintf(stderr, "%s[%d]:  SERIOUS:  FIXME, sb is_bin = %s, sb = %p\n", FILE__, __LINE__, sb->isBin() ? "true" : "false", sb);
 				SerializerBin<Symtab> *sbst = dynamic_cast<SerializerBin<Symtab> *> (sb);
-				if (NULL == sbst)
-				{
-					fprintf(stderr, "%s[%d]:  SERIOUS:  FIXME\n", FILE__, __LINE__);
-				}
 				SER_ERR("FIXME");
 			}
 
@@ -132,7 +125,6 @@ Serializable *Variable::serialize_impl(SerializerBase *sb, const char *tag) THRO
 			SerContextBase *scb = sb->getContext();
 			if (!scb)
 			{
-				fprintf(stderr, "%s[%d]:  SERIOUS:  FIXME\n", FILE__, __LINE__);
 				SER_ERR("FIXME");
 			}
 
@@ -140,18 +132,11 @@ Serializable *Variable::serialize_impl(SerializerBase *sb, const char *tag) THRO
 
 			if (!scs)
 			{
-				fprintf(stderr, "%s[%d]:  SERIOUS:  FIXME\n", FILE__, __LINE__);
 				SER_ERR("FIXME");
 			}
 
 			Symtab *st = scs->getScope();
 
-
-			//  remove this check
-			if ((t_id != 0xdeadbeef) && !st->findType(t_id))
-			{
-				fprintf(stderr, "%s[%d]:  ERROR:  serialize bad type %s\n", FILE__, __LINE__, type_->getName().c_str());
-			}
 		}
 	}
 	SER_CATCH(tag);
@@ -241,7 +226,7 @@ localVar::localVar(localVar &lvar) :
 	}
 }
 
-bool localVar::addLocation(VariableLocation &location)
+bool localVar::addLocation(const VariableLocation &location)
 {
    if (!locsExpanded_) {
       locs_.push_back(location);
@@ -325,6 +310,7 @@ void localVar::expandLocation(const VariableLocation &loc,
       newloc.refClass = loc.refClass;
       newloc.mr_reg = i->mr_reg;
       newloc.frameOffset = loc.frameOffset + i->frameOffset;
+      newloc.frameOffsetAbs = loc.frameOffset;
       newloc.lowPC = low;
       newloc.hiPC = high;
 
@@ -462,7 +448,6 @@ Serializable *localVar::serialize_impl(SerializerBase *sb, const char *tag) THRO
 			SerContextBase *scb = sb->getContext();
 			if (!scb)
 			{
-				fprintf(stderr, "%s[%d]:  SERIOUS:  FIXME\n", FILE__, __LINE__);
 				SER_ERR("FIXME");
 			}
 
@@ -470,7 +455,6 @@ Serializable *localVar::serialize_impl(SerializerBase *sb, const char *tag) THRO
 
 			if (!scs)
 			{
-				fprintf(stderr, "%s[%d]:  SERIOUS:  FIXME\n", FILE__, __LINE__);
 				SER_ERR("FIXME");
 			}
 
@@ -478,7 +462,6 @@ Serializable *localVar::serialize_impl(SerializerBase *sb, const char *tag) THRO
 
 			if (!st)
 			{
-				fprintf(stderr, "%s[%d]:  SERIOUS:  FIXME\n", FILE__, __LINE__);
 				SER_ERR("FIXME");
 			}
 

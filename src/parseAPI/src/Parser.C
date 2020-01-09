@@ -31,6 +31,9 @@
 #include <vector>
 #include <limits>
 
+// For Mutex
+#define PROCCONTROL_EXPORTS
+
 #include "dyntypes.h"
 
 #include "CodeObject.h"
@@ -51,6 +54,7 @@ using namespace Dyninst::InstructionAPI;
 typedef std::pair< Address, EdgeTypeEnum > edge_pair_t;
 typedef vector< edge_pair_t > Edges_t;
 
+#include "common/src/dthread.h"
 
 namespace {
     struct less_cr {
@@ -154,7 +158,7 @@ Parser::parse()
     _in_parse = true;
 
     parse_vanilla();
-
+    finalize();
     // anything else by default...?
 
     if(_parse_state < COMPLETE)
@@ -395,7 +399,7 @@ Parser::parse_frames(vector<ParseFrame *> & work, bool recursive)
 
     /* Recursive traversal parsing */ 
     while(!work.empty()) {
-        
+	
         pf = work.back();
         work.pop_back();
 
@@ -634,6 +638,8 @@ Parser::finalize(Function *f)
     }
 
 	bool cache_value = true;
+	/* this is commented out to prevent a failure in tampersStack, but
+           this may be an incorrect approach to fixing the problem.
 	if(frame_status(f->region(), f->addr()) < ParseFrame::PARSED) {
 		// XXX prevent caching of blocks, extents for functions that
 		// are actively being parsed. This prevents callbacks and other
@@ -641,7 +647,7 @@ Parser::finalize(Function *f)
 		// the caching flag and preventing later updates to the blocks()
 		// vector during finalization.
 		cache_value = false;
-	}
+	}*/
 
     parsing_printf("[%s] finalizing %s (%lx)\n",
         FILE__,f->name().c_str(),f->addr());
@@ -710,16 +716,12 @@ Parser::finalize(Function *f)
 void
 Parser::finalize()
 {
-    assert(!_in_finalize);
-    _in_finalize = true;
-
+    ScopeLock<> l(finalize_lock);
     if(_parse_state < FINALIZED) {
         finalize_funcs(hint_funcs);
         finalize_funcs(discover_funcs);
         _parse_state = FINALIZED;
     }
-
-    _in_finalize = false;
 }
 
 void
@@ -884,10 +886,8 @@ Parser::parse_frame(ParseFrame & frame, bool recursive) {
         
         Block * cur = NULL;
         ParseWorkElem * work = frame.popWork();
-
         if (work->order() == ParseWorkElem::call) {
             Function * ct = NULL;
-            Edge * ce = NULL;
 
             if (!work->callproc()) {
 	      // If we're not doing recursive traversal, skip *all* of the call edge processing.
@@ -911,12 +911,10 @@ Parser::parse_frame(ParseFrame & frame, bool recursive) {
                               work->edge()->src(),
                               work->edge());
                 ct = ctp.first;
-                ce = ctp.second;
 
                 work->mark_call();
             } else {
                 ct = _parse_data->findFunc(frame.codereg,work->target());
-                ce = work->edge();
             }
 
             if (recursive && ct &&
@@ -942,28 +940,6 @@ Parser::parse_frame(ParseFrame & frame, bool recursive) {
                 }
             }
 
-            // check for catch blocks after non-returning calls
-            if (ct && ct->_rs == NORETURN) {
-                Address catchStart;
-                Block * caller = ce->src();
-                if (frame.codereg->findCatchBlock(caller->end(),catchStart)) {
-                    parsing_printf("[%s] found post-return catch block %lx\n",
-                        FILE__,catchStart);
-
-                    // make an edge
-                    Edge * catch_edge = link_tempsink(caller,CATCH);
-                
-                    // push on worklist
-                    frame.pushWork(
-                        frame.mkWork(
-                            work->bundle(),
-                            catch_edge,
-                            catchStart,
-                            true,
-                            false));
-                }
-            }
-    
             continue;
         } else if (work->order() == ParseWorkElem::call_fallthrough) {
             // check associated call edge's return status
@@ -971,87 +947,193 @@ Parser::parse_frame(ParseFrame & frame, bool recursive) {
             if (!ce) {
                 // odd; no call edge in this bundle
                 parsing_printf("[%s] unexpected missing call edge at %lx\n",
-                    FILE__,work->edge()->src()->lastInsnAddr());
+                        FILE__,work->edge()->src()->lastInsnAddr());
             } else {
-                Address target = ce->trg()->start();
-                Function * ct = _parse_data->findFunc(frame.codereg,target);
-                bool is_plt = false;
+                // check for system call FT
+                Edge* edge = work->edge();
+                Block::Insns blockInsns;
+                edge->src()->getInsns(blockInsns);
+                auto prev = blockInsns.rbegin();
+                InstructionAPI::InstructionPtr prevInsn = prev->second;
                 bool is_nonret = false;
 
-                // check if associated call edge's return status is still unknown
-                if (ct && (ct->_rs == UNSET) ) {
-                    // Delay parsing until we've finished the corresponding call edge
-                    parsing_printf("[%s] Parsing FT edge %lx, corresponding callee (%s) return status unknown; delaying work\n",
-                            __FILE__,
-                            work->edge()->src()->lastInsnAddr(),
-                            ct->name().c_str());
+                if (prevInsn->getOperation().getID() == e_syscall) {
+                    Address src = edge->src()->lastInsnAddr();
 
-                    // Add work to ParseFrame's delayed list
-                    frame.pushDelayedWork(work, ct);
 
-                    // Continue other work for this frame
-                    continue; 
-                }
-                
-                is_plt = HASHDEF(plt_entries,target);
-   
-                // CodeSource-defined tests 
-                is_nonret = obj().cs()->nonReturning(target);
-                if (is_nonret) {
-                  parsing_printf("\t Disallowing FT edge: CodeSource reports nonreturning\n");
-                }
-                if (!is_nonret && is_plt) {
-                    is_nonret |= obj().cs()->nonReturning(plt_entries[target]);
-		            if (is_nonret) {
-		              parsing_printf("\t Disallowing FT edge: CodeSource reports PLT nonreturning\n");
-		            }
-                }
-                // Parsed return status tests
-                if (!is_nonret && !is_plt && ct) {
-                    is_nonret |= (ct->retstatus() == NORETURN);
-		            if (is_nonret) {
-		              parsing_printf("\t Disallowing FT edge: function is non-returning\n");
-		            }
-                }
-                // Call-stack tampering tests
-                if (unlikely(!is_nonret && frame.func->obj()->defensiveMode() && ct)) {
-                    is_nonret |= (ct->retstatus() == UNKNOWN);
-                    if (is_nonret) {
-                        parsing_printf("\t Disallowing FT edge: function in "
-                                       "defensive binary may not return\n");
-                        mal_printf("Disallowing FT edge: function %lx in "
-                                   "defensive binary may not return\n", ct->addr());
+                    // Need to determine if system call is non-returning
+                    long int syscallNumber;
+                    if (!getSyscallNumber(func, edge->src(), src, frame.codereg->getArch(), syscallNumber)) {
+                        // If we cannot retrieve a syscall number, assume the syscall returns
+                        parsing_printf("[%s] could not retrieve syscall edge, assuming returns\n", FILE__);
                     } else {
-                        StackTamper ct_tamper = ct->tampersStack();
-                        is_nonret |= (TAMPER_NONZERO == ct_tamper);
-                        is_nonret |= (TAMPER_ABS == ct_tamper);
+		        if (obj().cs()->nonReturningSyscall(syscallNumber)) {
+			    is_nonret = true;
+			}
+		    }
+
+                    if (is_nonret) {
+                        parsing_printf("[%s] no fallthrough for non-returning syscall\n",
+                                FILE__,
+                                work->edge()->src()->lastInsnAddr());
+
+                        // unlink tempsink fallthrough edge
+                        Edge * remove = work->edge();
+                        remove->src()->removeTarget(remove);
+                        factory().destroy_edge(remove);
+                        continue;
+                    }
+                } else {
+                    Address target = ce->trg()->start();
+                    Function * ct = _parse_data->findFunc(frame.codereg,target);
+                    bool is_plt = false;
+
+                    // check if associated call edge's return status is still unknown
+                    if (ct && (ct->_rs == UNSET) ) {
+                        // Delay parsing until we've finished the corresponding call edge
+                        parsing_printf("[%s] Parsing FT edge %lx, corresponding callee (%s) return status unknown; delaying work\n",
+                                __FILE__,
+                                work->edge()->src()->lastInsnAddr(),
+                                ct->name().c_str());
+
+                        // Add work to ParseFrame's delayed list
+                        frame.pushDelayedWork(work, ct);
+
+                        // Continue other work for this frame
+                        continue; 
+                    }
+
+                    is_plt = HASHDEF(plt_entries,target);
+
+                    // CodeSource-defined tests 
+                    is_nonret = obj().cs()->nonReturning(target);
+                    if (is_nonret) {
+                        parsing_printf("\t Disallowing FT edge: CodeSource reports nonreturning\n");
+                    }
+                    if (!is_nonret && is_plt) {
+                        is_nonret |= obj().cs()->nonReturning(plt_entries[target]);
                         if (is_nonret) {
-                            mal_printf("Disallowing FT edge: function at %lx "
-                                       "tampers with its stack\n", ct->addr());
-                            parsing_printf("\t Disallowing FT edge: function "
-                                           "tampers with its stack\n");
+                            parsing_printf("\t Disallowing FT edge: CodeSource reports PLT nonreturning\n");
                         }
                     }
-                }
-                if (is_nonret) {
-                    parsing_printf("[%s] no fallthrough for non-returning call "
-                                   "to %lx at %lx\n",FILE__,target,
-                                   work->edge()->src()->lastInsnAddr());
+                    // Parsed return status tests
+                    if (!is_nonret && !is_plt && ct) {
+                        is_nonret |= (ct->retstatus() == NORETURN);
+                        if (is_nonret) {
+                            parsing_printf("\t Disallowing FT edge: function is non-returning\n");
+                        }
+                    }
+                    // Call-stack tampering tests
+                    if (unlikely(!is_nonret && frame.func->obj()->defensiveMode() && ct)) {
+                        is_nonret |= (ct->retstatus() == UNKNOWN);
+                        if (is_nonret) {
+                            parsing_printf("\t Disallowing FT edge: function in "
+                                    "defensive binary may not return\n");
+                            mal_printf("Disallowing FT edge: function %lx in "
+                                    "defensive binary may not return\n", ct->addr());
+                        } else {
+                            StackTamper ct_tamper = ct->tampersStack();
+                            is_nonret |= (TAMPER_NONZERO == ct_tamper);
+                            is_nonret |= (TAMPER_ABS == ct_tamper);
+                            if (is_nonret) {
+                                mal_printf("Disallowing FT edge: function at %lx "
+                                        "tampers with its stack\n", ct->addr());
+                                parsing_printf("\t Disallowing FT edge: function "
+                                        "tampers with its stack\n");
+                            }
+                        }
+                    }
+                    if (is_nonret) {
+                        parsing_printf("[%s] no fallthrough for non-returning call "
+                                "to %lx at %lx\n",FILE__,target,
+                                work->edge()->src()->lastInsnAddr());
 
-                    // unlink tempsink fallthrough edge
-                    Edge * remove = work->edge();
-                    remove->src()->removeTarget(remove);
-                    factory().destroy_edge(remove);
-                    continue;
+                        // unlink tempsink fallthrough edge
+                        Edge * remove = work->edge();
+                        remove->src()->removeTarget(remove);
+                        factory().destroy_edge(remove);
+                    } else
+		        // Invalidate cache_valid for all sharing functions
+                        invalidateContainingFuncs(func, ce->src());                
                 }
+		
+		// Check catch blocks after non-returning calls
+		if (is_nonret) {
+		    Address catchStart;
+		    Block * caller = ce->src();
+		    // There may be nops between this non-returning call and the catch block and
+		    // there is possibility that the exception table entry points a nop.
+		    // Therefore, we need to check for every nop and first non-nop instruction after the call for catch blocks
 
-                // Invalidate cache_valid for all sharing functions
-                invalidateContainingFuncs(func, ce->src());                
+		    unsigned size = caller->region()->offset() + caller->region()->length() - caller->end();
+		    const unsigned char* bufferBegin = (const unsigned char *)(func->isrc()->getPtrToInstruction(caller->end()));
+		    InstructionDecoder dec(bufferBegin,size,frame.codereg->getArch());
+		    if (!ahPtr)
+		        ahPtr.reset(new InstructionAdapter_t(dec, caller->end(), func->obj(), 
+			            caller->region(), func->isrc(), NULL));
+         	    else
+		        ahPtr->reset(dec, caller->end(),func->obj(),
+			             caller->region(), func->isrc(), NULL);
+ 		    InstructionAdapter_t & ah = *ahPtr; 
+		    bool found = false;
+		    while (ah.getInstruction() && ah.isNop()) {
+		        if (frame.codereg->findCatchBlock(ah.getAddr(),catchStart)) {
+			    found = true;
+			    break;
+			}
+		        ah.advance();
+		    }		   
+		    if (found || (ah.getInstruction() && frame.codereg->findCatchBlock(ah.getAddr(),catchStart))) {
+		        parsing_printf("[%s] found post-return catch block %lx\n", FILE__,catchStart);
+			// make an edge
+			Edge * catch_edge = link_tempsink(caller,CATCH);                
+			
+			// push on worklist
+			frame.pushWork(
+			    frame.mkWork(
+			        work->bundle(),
+				catch_edge,
+				catchStart,
+				true,
+				false));
+		    }
+		    continue;
+		}
             }
         } else if (work->order() == ParseWorkElem::seed_addr) {
             cur = leadersToBlock[work->target()];
+        } else if (work->order() == ParseWorkElem::resolve_jump_table) {
+	    // resume to resolve jump table 
+	    parsing_printf("... continue parse indirect jump at %lx\n", work->ah()->getAddr());
+	    Block *nextBlock = work->cur();
+	    if (nextBlock->last() != work->ah()->getAddr()) {
+	        // The block has been split
+	        region_data * rd = _parse_data->findRegion(frame.codereg);
+		set<Block*> blocks;
+		rd->blocksByRange.find(work->ah()->getAddr(), blocks);
+		for (auto bit = blocks.begin(); bit != blocks.end(); ++bit) {
+		    if ((*bit)->last() == work->ah()->getAddr()) {
+		        nextBlock = *bit;
+			break;
+		    }
+		}
+
+	    }
+	    ProcessCFInsn(frame,nextBlock,*work->ah());
+            continue;
+	}
+        // call fallthrough case where we have already checked that
+        // the target returns. this is used in defensive mode.
+        else if (work->order() == ParseWorkElem::checked_call_ft) {
+            Edge* ce = bundle_call_edge(work->bundle());
+            if (ce != NULL) {
+                invalidateContainingFuncs(func, ce->src());
+            } else {
+                parsing_printf("[%s] unexpected missing call edge at %lx\n",
+                        FILE__,work->edge()->src()->lastInsnAddr());
+            }
         }
-                       
+        
         if (NULL == cur) {
             pair<Block*,Edge*> newedge =
                 add_edge(frame,
@@ -1096,6 +1178,11 @@ Parser::parse_frame(ParseFrame & frame, bool recursive) {
                   func->set_retstatus(UNKNOWN);
                 }
             }
+	    // The edge to this shared block is changed from 
+	    // "going to sink" to going to this shared block.
+	    // This changes the function boundary, so we need to
+	    // invalidate the cache.
+	    func->_cache_valid = false;
             continue;
         }
 
@@ -1191,8 +1278,8 @@ Parser::parse_frame(ParseFrame & frame, bool recursive) {
             ParseCallback::insn_details insn_det;
             insn_det.insn = &ah;
 	     
-                parsing_printf("[%s:%d] curAddr 0x%lx \n",
-                    FILE__,__LINE__,curAddr);
+                parsing_printf("[%s:%d] curAddr 0x%lx: %s \n",
+                    FILE__,__LINE__,curAddr, insn_det.insn->getInstruction()->format().c_str() );
 
             if (func->_is_leaf_function) {
                 Address ret_addr;
@@ -1235,7 +1322,15 @@ Parser::parse_frame(ParseFrame & frame, bool recursive) {
             ++num_insns; 
 
             if(ah.hasCFT()) {
-               ProcessCFInsn(frame,cur,ah);
+//	       if (false) {
+	       if (ah.isIndirectJump()) {
+	           // Create a work element to represent that
+		   // we will resolve the jump table later
+                   end_block(cur,ah);
+                   frame.pushWork( frame.mkWork( work->bundle(), cur, ah));
+	       } else {
+	           ProcessCFInsn(frame,cur,ah);
+	       }
                break;
             } else if (func->_saves_fp &&
                        func->_no_stack_frame &&
@@ -1256,7 +1351,7 @@ Parser::parse_frame(ParseFrame & frame, bool recursive) {
             } else if ( ah.isInterruptOrSyscall() ) {
                 // 5. Raising instructions
                 end_block(cur,ah);
-    
+
                 pair<Block*,Edge*> newedge =
                     add_edge(frame,frame.func,cur,ah.getNextAddr(),FALLTHROUGH,NULL);
                 Block * targ = newedge.first;
@@ -1292,6 +1387,8 @@ Parser::parse_frame(ParseFrame & frame, bool recursive) {
                     _pcb.abruptEnd_cf(cur->lastInsnAddr(),cur,&det);
                     _pcb.foundWeirdInsns(func);
                     end_block(cur,ah);
+                    // allow invalid instructions to end up as a sink node.
+		    link(cur, _sink, DIRECT, true);
                     break;
                 } else if (ah.isNopJump()) {
                     // patch the jump to make it a nop, and re-set the 
@@ -1356,7 +1453,8 @@ Parser::parse_frame(ParseFrame & frame, bool recursive) {
 
     /** parsing complete **/
     if (HASHDEF(plt_entries,frame.func->addr())) {
-        if (obj().cs()->nonReturning(frame.func->addr())) {
+//        if (obj().cs()->nonReturning(frame.func->addr())) {
+        if (obj().cs()->nonReturning(plt_entries[frame.func->addr()])) {        
             frame.func->set_retstatus(NORETURN);
         } else {
             frame.func->set_retstatus(UNKNOWN);
@@ -1709,6 +1807,12 @@ Parser::findBlocks(CodeRegion *r, Address addr, set<Block *> & blocks)
     return _parse_data->findBlocks(r,addr,blocks); 
 }
 
+// find blocks without parsing.
+int Parser::findCurrentBlocks(CodeRegion* cr, Address addr, 
+                                std::set<Block*>& blocks) {
+    return _parse_data->findBlocks(cr, addr, blocks);
+}
+
 Edge*
 Parser::link(Block *src, Block *dst, EdgeTypeEnum et, bool sink)
 {
@@ -1889,5 +1993,47 @@ void Parser::resumeFrames(Function * func, vector<ParseFrame *> & work)
         // remove func from delayedFrames map
         delayedFrames.erase(func);
     }
+}
+
+bool Parser::getSyscallNumber(Function * /*func*/,
+        Block * block,
+        Address /*addr*/,
+        Architecture arch,
+        long int & val)
+{
+    val = -1;
+
+    // In the common case, the setup of system call number
+    // is a mov in the previous instruction. We don't currently look elsewhere.
+    // In the future, could use slicing and symeval to find the value of
+    // this register at the system call (as unstrip does).
+    Block::Insns blockInsns;
+    block->getInsns(blockInsns);
+    auto prevPair = ++(blockInsns.rbegin());
+    InstructionAPI::InstructionPtr prevInsn = prevPair->second;
+    if (prevInsn->getOperation().getID() != e_mov) {
+        return false;
+    }
+
+    MachRegister syscallNumberReg = MachRegister::getSyscallNumberReg(arch);
+    if (syscallNumberReg == InvalidReg) {
+        return false;
+    }
+    InstructionAPI::RegisterAST* regAST = new InstructionAPI::RegisterAST(syscallNumberReg);
+    InstructionAPI::RegisterAST::Ptr regASTPtr = InstructionAPI::RegisterAST::Ptr(regAST);
+
+    std::vector<InstructionAPI::Operand> operands;
+    prevInsn->getOperands(operands);
+    for (unsigned i = 0; i < operands.size(); i++) {
+        if (!operands[i].isWritten(regASTPtr)) {
+            InstructionAPI::Expression::Ptr value = operands[i].getValue();
+            InstructionAPI::Result res = value->eval();
+            if (res.defined) {
+                val = res.convert<Offset>();
+            }
+        }
+    }
+
+    return (val != -1);
 }
 

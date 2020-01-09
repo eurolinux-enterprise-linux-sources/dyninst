@@ -109,6 +109,14 @@ enum AMD64_REG_NUMBERS {
     REGNUM_MM5,
     REGNUM_MM6,
     REGNUM_MM7,
+    REGNUM_K0,
+    REGNUM_K1,
+    REGNUM_K2,
+    REGNUM_K3,
+    REGNUM_K4,
+    REGNUM_K5,
+    REGNUM_K6,
+    REGNUM_K7,
     REGNUM_XMM0,
     REGNUM_XMM1,
     REGNUM_XMM2,
@@ -125,7 +133,89 @@ enum AMD64_REG_NUMBERS {
     REGNUM_XMM13,
     REGNUM_XMM14,
     REGNUM_XMM15,
+    REGNUM_XMM16,
+    REGNUM_XMM17,
+    REGNUM_XMM18,
+    REGNUM_XMM19,
+    REGNUM_XMM20,
+    REGNUM_XMM21,
+    REGNUM_XMM22,
+    REGNUM_XMM23,
+    REGNUM_XMM24,
+    REGNUM_XMM25,
+    REGNUM_XMM26,
+    REGNUM_XMM27,
+    REGNUM_XMM28,
+    REGNUM_XMM29,
+    REGNUM_XMM30,
+    REGNUM_XMM31,
+    REGNUM_YMM0,
+    REGNUM_YMM1,
+    REGNUM_YMM2,
+    REGNUM_YMM3,
+    REGNUM_YMM4,
+    REGNUM_YMM5,
+    REGNUM_YMM6,
+    REGNUM_YMM7,
+    REGNUM_YMM8,
+    REGNUM_YMM9,
+    REGNUM_YMM10,
+    REGNUM_YMM11,
+    REGNUM_YMM12,
+    REGNUM_YMM13,
+    REGNUM_YMM14,
+    REGNUM_YMM15,
+    REGNUM_YMM16,
+    REGNUM_YMM17,
+    REGNUM_YMM18,
+    REGNUM_YMM19,
+    REGNUM_YMM20,
+    REGNUM_YMM21,
+    REGNUM_YMM22,
+    REGNUM_YMM23,
+    REGNUM_YMM24,
+    REGNUM_YMM25,
+    REGNUM_YMM26,
+    REGNUM_YMM27,
+    REGNUM_YMM28,
+    REGNUM_YMM29,
+    REGNUM_YMM30,
+    REGNUM_YMM31,
+    REGNUM_ZMM0,
+    REGNUM_ZMM1,
+    REGNUM_ZMM2,
+    REGNUM_ZMM3,
+    REGNUM_ZMM4,
+    REGNUM_ZMM5,
+    REGNUM_ZMM6,
+    REGNUM_ZMM7,
+    REGNUM_ZMM8,
+    REGNUM_ZMM9,
+    REGNUM_ZMM10,
+    REGNUM_ZMM11,
+    REGNUM_ZMM12,
+    REGNUM_ZMM13,
+    REGNUM_ZMM14,
+    REGNUM_ZMM15,
+    REGNUM_ZMM16,
+    REGNUM_ZMM17,
+    REGNUM_ZMM18,
+    REGNUM_ZMM19,
+    REGNUM_ZMM20,
+    REGNUM_ZMM21,
+    REGNUM_ZMM22,
+    REGNUM_ZMM23,
+    REGNUM_ZMM24,
+    REGNUM_ZMM25,
+    REGNUM_ZMM26,
+    REGNUM_ZMM27,
+    REGNUM_ZMM28,
+    REGNUM_ZMM29,
+    REGNUM_ZMM30,
+    REGNUM_ZMM31,
     REGNUM_EFLAGS,
+    REGNUM_FS,
+    REGNUM_GS,
     REGNUM_IGNORED
 }
 ;
@@ -176,9 +266,11 @@ enum AMD64_REG_NUMBERS {
 #define PREFIX_ADDR   (1<<23) /* address size override */
 #define PREFIX_REX    (1<<24) /* AMD64 REX prefix */
 #define PREFIX_OPCODE (1<<25) /* prefix is part of opcode (SSE) */
+#define PREFIX_AVX    (1<<26) /* VEX2 prefix (two byte) */
+#define PREFIX_AVX2   (1<<27) /* VEX3 prefix (three byte) */
+#define PREFIX_AVX512 (1<<28) /* EVEX prefix (four byte) */
 
 /* end of instruction type descriptor values */
-
 
 /* opcodes of some one byte opcode instructions */
 /* ADD */
@@ -317,12 +409,8 @@ enum AMD64_REG_NUMBERS {
 #define POP_EBI  (0x5e)
 #define POP_EDI  (0x5f)
 
-
 #define PUSHAD   (0x60)
 #define POPAD    (0x61)
-
-
-
 
 #define JE_R8    (0x74)
 #define JNE_R8   (0x75)
@@ -330,7 +418,6 @@ enum AMD64_REG_NUMBERS {
 #define JLE_R8   (0x7E)
 #define JG_R8    (0x7F)
 #define JGE_R8   (0x7D)
-
 
 #define MOVREGMEM_REG (0x8b) 
 #define MOV_R8_TO_RM8 (0x88)     //move r8 to r/m8
@@ -340,19 +427,11 @@ enum AMD64_REG_NUMBERS {
 #define MOV_RM16_TO_R16 (0x8b)
 #define MOV_RM32_TO_R32 (0x8b)
 
-
-
 #define NOP      (0x90)
 #define PUSHFD   (0x9C)
 #define POPFD    (0x9D)
 
-
 #define JCXZ     (0xE3)
-
-
-
-
-
 
 #define FSAVE    (0x9BDD)
 #define FSAVE_OP (6)
@@ -376,6 +455,69 @@ enum {
   RepGroup = 0
 };
 
+#ifndef VEX_PREFIX_MASKS
+#define VEX_PREFIX_MASKS
+
+/**
+ * Enum that differentiates different types of VEX prefixed instructions.
+ * This is also used as the demultiplexer for the sseVexMult table so the
+ * bindings should not be changed.
+ */
+enum VEX_TYPE
+{
+    VEX_TYPE_NONE=0, VEX_TYPE_VEX2, VEX_TYPE_VEX3, VEX_TYPE_EVEX
+};
+
+/* Masks to help decode vex prefixes */
+
+/** VEX 3 masks (2nd byte) */
+#define PREFIX_VEX3 ((unsigned char)0xC4)
+#define PREFIX_VEX2 ((unsigned char)0xC5)
+#define VEX3_REXX   (1 << 6)
+#define VEX3_REXB   (1 << 5)
+#define VEX3_M      ((1 << 5) - 1)
+#define VEX3_W      (1 << 7)
+
+/* VEX2 and VEX3 share these bits on their final byte  */
+#define VEX_VVVV   (((1 << 4) - 1) << 3)
+#define VEX_L      (1 << 2)
+#define VEX_PP     (0x03)
+#define VEX_REXR   (1 << 7)
+
+/* VEX mask helper macros */
+#define VEXGET_VVVV(b)  (unsigned char)((~((unsigned char) \
+            ((b & VEX_VVVV) >> 3))) & 0xF)
+
+#define VEXGET_L(b)     (char)((b & VEX_L) >> 2)
+#define VEXGET_R(b)     (((unsigned char)((~b & (1 << 7)) >> 7)) & 0x01)
+#define VEXGET_PP(b)    (char)(b & VEX_PP)
+
+#define VEX3GET_W(b)    (char)((b & VEX3_W) >> 7)
+#define VEX3GET_M(b)    (b & VEX3_M)
+#define VEX3GET_X(b)    (((unsigned char)(~b) & (unsigned char)(1 << 6)) >> 6)
+#define VEX3GET_B(b)    (((unsigned char)(~b) & (unsigned char)(1 << 5)) >> 5)
+#define VEX3GET_M(b)    (b & VEX3_M)
+
+/** EVEX masks */
+#define PREFIX_EVEX ((unsigned char)0x62)
+
+#define EVEXGET_W(b) VEX3GET_W(b)
+#define EVEXGET_L1(b) (unsigned char)((1 << 5) & (b))
+#define EVEXGET_L2(b) (unsigned char)((1 << 6) & (b))
+#define EVEXGET_LL(b) (unsigned char)(((b) >> 5) & 0x03)
+#define EVEXGET_PP(b) (unsigned char)(3 & (b))
+#define EVEXGET_MM(b) (unsigned char)(3 & (b))
+#define EVEXGET_AAA(b) (unsigned char)(7 & (b))
+#define EVEXGET_r(b) (((unsigned char)(~b) & (unsigned char)(1 << 7)) >> 7)
+#define EVEXGET_R(b) (((unsigned char)(~b) & (unsigned char)(1 << 4)) >> 4)
+#define EVEXGET_b(b) (((unsigned char)(~b) & (unsigned char)(1 << 5)) >> 5)
+#define EVEXGET_x(b) (((unsigned char)(~b) & (unsigned char)(1 << 6)) >> 6)
+
+#define EVEXGET_VVVV(a, b)  ((((unsigned char)~(a) >> 3) & 0x0F)) | \
+            (((unsigned char)~(b) & 0x08) << 1)
+#define EVEXGET_V(b) (((unsigned char)~(b) & 0x08) << 1)
+
+#endif
 
 #ifndef PREFIX_LOCK
 #define PREFIX_LOCK   (unsigned char)(0xF0)
@@ -389,6 +531,8 @@ enum {
 #define PREFIX_SEGFS  (unsigned char)(0x64)
 #define PREFIX_SEGGS  (unsigned char)(0x65)
 
+#define PREFIX_XOP  (unsigned char)(0x8F)
+
 #define PREFIX_BRANCH0 (unsigned char)(0x2E)
 #define PREFIX_BRANCH1 (unsigned char)(0x3E)
 
@@ -399,6 +543,29 @@ enum {
 COMMON_EXPORT void ia32_set_mode_64(bool mode);
 COMMON_EXPORT bool ia32_is_mode_64();
 
+/**
+ * AVX/AVX2/EVEX addressing modes (not in manual).
+ *
+ * am_HK operand is an EVEX masking register (k0 - k7) which is specified
+ *        using the EVEX.vvvv bits.
+ * am_VK the reg field of the R/M byte specifies an EVEX masking register.
+ * am_WK the R/M field of the R/M byte specifies an EVEX masking register.
+ *
+ * am_XH same as am_H except the register is constrained to an XMM register,
+ *        reguardless of the VEX.L field.
+ * am_XV same as am_V except the register is contrained to an XMM register,
+ *        reguardless of the VEX.L field.
+ * am_XW same as am_W except the register is constrained to an XMM register,
+ *        reguardless of the VEX.L field.
+ *
+ * am_YH same as am_H except the register is constrained to either an XMM
+ *        or YMM register, based on the VEX.L bits field.
+ * am_YV same as am_V except the register is constrained to either an XMM
+ *        or YMM register, based on the VEX.L bits field.
+ * am_YW same as am_W except the register is constrained to either an XMM
+ *        or YMM register, based on the VEX.L bits field.
+ */
+
 // addressing methods (see appendix A-2)
 // I've added am_reg (for registers implicitely encoded in instruciton), 
 // and am_stackX for stack operands [this kinda' messy since there are actually two operands:
@@ -406,20 +573,25 @@ COMMON_EXPORT bool ia32_is_mode_64();
 // added: am_reg, am_stack, am_allgprs
 // ADDED: am_ImplImm for implicit immediates
 // ADDED: am_RM, am_UM,
-enum { am_A=1, am_C, am_D, am_E, am_F, am_G, am_I, am_J, am_M, am_O, // 10
-       am_P, am_Q, am_R, am_S, am_T, am_U, am_UM, am_V, am_W, am_X, am_Y, am_reg, // 20
-       am_stackH, am_stackP, am_allgprs, am_VR, am_tworeghack, am_ImplImm, am_RM }; // pusH and poP produce different addresses
+enum { am_A=1, am_B, am_C, am_D, am_E, am_F, am_G, am_H, am_I, am_J, // 1 -> 10
+	am_M, am_N, am_O, am_P, am_Q, am_R, am_S, am_T, am_XU, am_YU,  // 11 -> 20
+	am_U, am_UM, am_V, am_W, am_X, am_Y, am_reg, am_stackH, am_stackP, am_allgprs,
+	am_tworeghack, am_ImplImm, am_RM, am_HK, am_VK, am_WK, am_XH, am_XV, am_XW, am_YH, 
+	am_YV, am_YW }; // pusH and poP produce different addresses
 
 // operand types - idem, but I invented quite a few to make implicit operands explicit.
 // ADDED: op_y
-enum { op_a=1, op_b, op_c, op_d, op_dq, op_p, op_pd, op_pi, op_ps, // 9 
-       op_q, op_s, op_sd, op_ss, op_si, op_v, op_w, op_y, op_z, op_lea, op_allgprs, op_512,
+enum { op_a=1, op_b, op_c, op_d, op_dq, op_p, op_pd, op_pi, op_ps, op_q, // 10
+       op_qq, op_s, op_sd, op_ss, op_si, op_v, op_w, op_y, op_z, op_lea, op_allgprs, op_512,
        op_f, op_dbl, op_14, op_28, op_edxeax, op_ecxebx};
 
 
 // tables and pseudotables
 enum {
-  t_ill=0, t_oneB, t_twoB, t_threeB, t_threeB2, t_prefixedSSE, t_coprocEsc, t_grp, t_sse, t_sse_bis, t_sse_ter, t_grpsse, t_3dnow, t_done=99
+  t_ill=0, t_oneB, t_twoB, t_threeB, t_threeB2, t_prefixedSSE, t_coprocEsc, 
+  t_grp, t_sse, t_sse_mult, t_sse_bis, t_sse_bis_mult, 
+  t_sse_ter, t_sse_ter_mult, t_grpsse, t_3dnow, t_vexl, t_vexw, t_sse_vex_mult, 
+  t_done=99
 };
 
 // registers used for memory access
@@ -457,8 +629,16 @@ enum { sNONE=0, // the instruction does something that cannot be classified as r
        s1W2R3RW, // additional push/pop
        s1RW2R3R, // shld/shrd
        s1RW2RW3R, // [i]div, cmpxch8b
-       s1R2R3R
-}; // should be strictly less than 2^17 otherwise adjust FPOS below
+       s1RW2R3RW, // v[p]gather[ps, pd, qq, qd]
+       s1R2R3R,
+
+/* Only 4 operands below here */
+       s1W2R3R4R,
+       s1RW2R3R4R 
+}; // should be strictly less than 2^17 otherwise adjust FPOS in arch-x86.C
+
+/* This should equal the first operand semantic where 4 operands are used. */
+#define s4OP s1W2R3R4R
 
 
 struct modRMByte {
@@ -473,11 +653,11 @@ struct sIBByte {
   unsigned base  : 3;
 };
 
+class ia32_instruction;
 
 class ia32_prefixes
 {
-  friend bool ia32_decode_prefixes(const unsigned char* addr, ia32_prefixes&,
-                                   ia32_locations *loc);
+  friend COMMON_EXPORT bool ia32_decode_prefixes(const unsigned char* addr, ia32_instruction& insn);
   friend bool ia32_decode_rex(const unsigned char* addr, ia32_prefixes&,
                               ia32_locations *loc);
  private:
@@ -490,6 +670,7 @@ class ia32_prefixes
   // so this array is extended to 5 elements
   unsigned char prfx[5];
   unsigned char opcode_prefix;
+  
  public:
   unsigned int getCount() const { return count; }
   unsigned char getPrefix(unsigned char group) const { assert(group <= 4); return prfx[group]; }
@@ -500,6 +681,23 @@ class ia32_prefixes
   unsigned char getOpcodePrefix() const { return opcode_prefix; }
   unsigned char getAddrSzPrefix() const { return prfx[3]; }
   unsigned char getOperSzPrefix() const { return prfx[2]; }
+
+  /* Because VEX fields are based on the VEX type, they are decoded immediately. */
+  bool vex_present; /* Does this instruction have a vex prefix?  */
+  VEX_TYPE vex_type; /* If there is a vex prefix present, what type is it? */
+  unsigned char vex_prefix[5]; /* Support up to EVEX (VEX-512) */
+  int vex_sse_mult; /* index for sse multiplexer table */
+  int vex_vvvv_reg; /* The register specified by this prefix. */
+  int vex_ll; /* l bit for VEX2, VEX3 or ll for EVEX */
+  int vex_pp; /* pp bits for VEX2, VEX3 or EVEX */
+  int vex_m_mmmm; /* m-mmmm bits for VEX2, VEX3 or EVEX */
+  int vex_w; /* w bit for VEX2, VEX3 or EVEX */
+  int vex_V; /* V' modifier for EVEX */
+  int vex_r; /* The VEX REXR bit for VEX2, VEX3 or EVEX*/
+  int vex_R; /* The VEX REXR' bit for EVEX */
+  int vex_x; /* The VEX REXX bit for VEX2, VEX3 or EVEX */
+  int vex_b; /* The VEX REXB bit for VEX2, VEX3 or EVEX */
+  int vex_aaa; /* Selects the vector mask register for EVEX */
 };
 
 // helper routine to tack-on rex bit when needed
@@ -588,7 +786,6 @@ enum sizehacks {
   shREPNESCAS
 };
 
-
 struct ia32_condition
 {
   bool is;
@@ -598,10 +795,6 @@ struct ia32_condition
   ia32_condition() : is(false), tttn(-1) {}
   void set(int _tttn) { is = true; tttn = _tttn; }
 };
-
-bool ia32_decode_prefixes(const unsigned char* addr, ia32_prefixes&,
-                          ia32_locations *loc = NULL);
-
 
 struct ia32_operand {  // operand as given in Intel book tables
   unsigned int admet;  // addressing method
@@ -647,11 +840,15 @@ class ia32_instruction
                                             const ia32_entry& gotit, 
                                             const char* addr, 
                                             ia32_instruction& instruct);
+  friend COMMON_EXPORT bool ia32_decode_prefixes(const unsigned char* addr, ia32_instruction& insn);
   friend COMMON_EXPORT ia32_instruction& ia32_decode(unsigned int capa, const unsigned char* addr,
 		  		       ia32_instruction& instruct);
+  friend COMMON_EXPORT int ia32_decode_opcode(unsigned int capa,
+                        const unsigned char* addr, ia32_instruction& instruct, 
+                        ia32_entry** gotit_ret);
   friend unsigned int ia32_decode_operands (const ia32_prefixes& pref, const ia32_entry& gotit, 
                                             const unsigned char* addr, ia32_instruction& instruct,
-                                            ia32_memacc *mac = NULL);
+                                            ia32_memacc *mac);
   friend ia32_instruction& ia32_decode_FP(const ia32_prefixes& pref, const unsigned char* addr,
                                           ia32_instruction& instruct);
   friend unsigned int ia32_emulate_old_type(ia32_instruction& instruct);
@@ -660,7 +857,7 @@ class ia32_instruction
                                           const unsigned char* addr, 
                                           ia32_instruction& instruct,
 					  ia32_entry * entry,
-                                          ia32_memacc *mac = NULL);
+                                          ia32_memacc *mac);
 
   unsigned int   size;
   ia32_prefixes  prf;
@@ -704,14 +901,41 @@ class ia32_instruction
 #define IA32_DECODE_PREFIXES	(1<<0)
 #define IA32_DECODE_MNEMONICS	(1<<1)
 #define IA32_DECODE_OPERANDS	(1<<2)
-#define IA32_DECODE_JMPS	(1<<3)
+#define IA32_DECODE_JMPS	    (1<<3)
 #define IA32_DECODE_MEMACCESS	(1<<4)
 #define IA32_DECODE_CONDITION 	(1<<5)
 
-#define IA32_FULL_DECODER (IA32_DECODE_PREFIXES | IA32_DECODE_MNEMONICS | IA32_DECODE_OPERANDS | IA32_DECODE_JMPS | IA32_DECODE_MEMACCESS | IA32_DECODE_CONDITION)
+#define IA32_FULL_DECODER (IA32_DECODE_PREFIXES \
+        | IA32_DECODE_MNEMONICS \
+        | IA32_DECODE_OPERANDS \
+        | IA32_DECODE_JMPS \
+        | IA32_DECODE_MEMACCESS \
+        | IA32_DECODE_CONDITION)
 #define IA32_SIZE_DECODER 0
 
-COMMON_EXPORT ia32_instruction& ia32_decode(unsigned int capabilities, const unsigned char* addr, ia32_instruction&);
+/* TODO: documentation*/
+COMMON_EXPORT bool ia32_decode_prefixes(const unsigned char* addr, ia32_instruction& insn);
+
+/**
+ * Decode just the opcode of the given instruction. This implies that
+ * ia32_decode_prefixes has already been called on the given instruction
+ * and addr has been moved past the prefix bytes. Returns zero on success,
+ * non zero otherwise.
+ */
+COMMON_EXPORT int ia32_decode_opcode(unsigned int capa, 
+        const unsigned char* addr, ia32_instruction& instruct, 
+        ia32_entry** gotit_ret);
+
+/**
+ * Do a complete decoding of the instruction at the given address. This
+ * function calls ia32_decode_prefixes, ia32_decode_opcode and
+ * ia32_decode_operands. Returns zero on success, non zero otherwise.
+ * When there is a decoding failure, the state of the given instruction
+ * is not defined. capabilities is a mask of the above flags (IA32_DECODE_*).
+ * The mask determines what part of the instruction should be decoded.
+ */
+COMMON_EXPORT ia32_instruction& ia32_decode(unsigned int capabilities,
+        const unsigned char* addr, ia32_instruction&);
 
 
 enum dynamic_call_address_mode {
@@ -746,7 +970,8 @@ COMMON_EXPORT Address get_target(const unsigned char *instr, unsigned type, unsi
 #if defined(arch_x86_64)
 // size of instruction seqeunce to get anywhere in address space
 // without touching any registers
-#define JUMP_ABS64_SZ (17)
+//#define JUMP_ABS64_SZ (17)
+#define JUMP_ABS64_SZ (14)
 // Jump is push/return; call is push/push/return, so subtract a return
 #define CALL_ABS64_SZ (JUMP_ABS64_SZ+JUMP_ABS64_SZ-1)
 #endif
@@ -913,8 +1138,10 @@ inline bool is_addr32(Address addr) {
     return (addr < UI32_MAX);
 }
 
-COMMON_EXPORT void decode_SIB(unsigned sib, unsigned& scale, Register& index_reg, Register& base_reg);
-COMMON_EXPORT const unsigned char* skip_headers(const unsigned char*, ia32_prefixes* = NULL);
+COMMON_EXPORT void decode_SIB(unsigned sib, unsigned& scale, 
+        Register& index_reg, Register& base_reg);
+COMMON_EXPORT const unsigned char* skip_headers(const unsigned char*, 
+        ia32_instruction* = NULL);
 
 /* addresses on x86 don't have to be aligned */
 /* Address bounds of new dynamic heap segments.  On x86 we don't try

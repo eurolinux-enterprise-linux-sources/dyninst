@@ -1,5 +1,6 @@
 # CMake configuration for common directory
 
+
 if(NOT WIN32)
 include_directories (
     ${PROJECT_SOURCE_DIR}/common/h 
@@ -40,6 +41,7 @@ set (SRC_LIST
     src/addrtranslate.C 
     src/arch-x86.C 
     src/arch-power.C 
+	src/arch-aarch64.C
     src/debug_common.C 
     src/VariableLocation.C 
     src/Buffer.C
@@ -96,7 +98,7 @@ if (PLATFORM MATCHES nt OR PLATFORM MATCHES windows)
 #	src/dthread.C
     src/addrtranslate-win.C
   )
-  add_definitions(-DWIN32 -D_WIN32_WINNT=0x500 -Dsnprintf=_snprintf)
+  add_definitions(-DWIN32 -D_WIN32_WINNT=0x500)
 endif()  
 
 
@@ -104,22 +106,19 @@ SET_SOURCE_FILES_PROPERTIES(${SRC_LIST} PROPERTIES LANGUAGE CXX)
 
 ADD_DEFINITIONS(-DCOMMON_LIB)
 
-add_library (common ${SRC_LIST})
-add_library (common_static STATIC ${SRC_LIST})
-FILE (GLOB headers "h/*.h")
-set_target_properties (common common_static PROPERTIES PUBLIC_HEADER "${headers}")
-
-if (${IBERTY_LIBRARY} MATCHES iberty)
-target_link_private_libraries (common ${IBERTY_LIBRARY})
+if (IBERTY_FOUND)
+set(DEPS ${IBERTY_LIBRARIES})
 endif()
 
+
+dyninst_library(common ${DEPS})
 if(PLATFORM MATCHES nt OR PLATFORM MATCHES windows)
-  target_link_libraries (common Psapi WS2_32 dbghelp)
+  target_link_private_libraries(common Psapi WS2_32 dbghelp)
 endif()
+target_link_private_libraries(common ${Boost_LIBRARIES})
 
-INSTALL (TARGETS common common_static
-        EXPORT DyninstTargets
-	RUNTIME DESTINATION ${INSTALL_LIB_DIR}
-        LIBRARY DESTINATION ${INSTALL_LIB_DIR}
-        ARCHIVE DESTINATION ${INSTALL_LIB_DIR}
-        PUBLIC_HEADER DESTINATION ${INSTALL_INCLUDE_DIR})
+
+IF (USE_COTIRE)
+    cotire(common)
+ENDIF()
+

@@ -30,49 +30,34 @@
 #if !defined(SINGLETON_OBJECT_POOL_H)
 #define SINGLETON_OBJECT_POOL_H
 
-#define BOOST_POOL_NO_MT
-#undef BOOST_HAS_THREADS
+//#define BOOST_POOL_NO_MT
+//#undef BOOST_HAS_THREADS
 
 #include <boost/pool/pool.hpp>
 #include "pool_allocators.h"
 
+
 // This is only safe for objects with nothrow constructors...
 template <typename T, typename Alloc = boost::default_user_allocator_new_delete>
-class singleton_object_pool
+class singleton_object_pool : private boost::singleton_pool<T, sizeof(T), Alloc>
 {
- private:
- struct pool_impl
- {
-   boost::pool<Alloc> p;
-   pool_impl() : p(sizeof(T), 32) 
-   {
-   }
- };
- struct singleton
- {
-    static pool_impl& instance()
-    {
-        static pool_impl* thePool = new pool_impl;
-        return *thePool;
-    }
- };
- 
-  
+  typedef boost::singleton_pool<T, sizeof(T), Alloc> parent_t;
+
  inline static void free(T* free_me)
  {
-   singleton::instance().p.free(free_me);
+   parent_t::free(free_me);
  }
- 
- inline static T* malloc() 
+
+ inline static T* malloc()
   {
-    return static_cast<T*>(singleton::instance().p.malloc());
+    return reinterpret_cast<T*>(parent_t::malloc());
   }
  public:
   inline static bool is_from(T* t)
   {
-    return singleton::instance().p.is_from(t);
+    return parent_t::is_from(t);
   }
-  
+
   static T* construct()
   {
     T* const temp = malloc();
@@ -120,13 +105,23 @@ class singleton_object_pool
     new(temp) T(a1, a2, a3, a4, a5);
     return temp;
   }
+  template <typename A1, typename A2, typename A3, typename A4, typename A5, typename A6>
+  static T* construct(const A1& a1, const A2& a2, const A3& a3, const A4& a4, const A5& a5, const A6& a6)
+  {
+    T* const temp = malloc();
+    if(temp == 0) return temp;
+    new(temp) T(a1, a2, a3, a4, a5, a6);
+    return temp;
+  }
+
   inline static void destroy(T* const kill_me)
   {
+
     kill_me->~T();
     free(kill_me);
   }
-  
-  
+
+
 };
 
 

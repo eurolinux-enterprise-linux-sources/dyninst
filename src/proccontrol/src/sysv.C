@@ -37,12 +37,12 @@
 #include "common/src/freebsdKludges.h"
 #endif
 
-#include "proccontrol/h/Handler.h"
-#include "proccontrol/h/PlatFeatures.h"
+#include "Handler.h"
+#include "PlatFeatures.h"
 
-#include "proccontrol/src/sysv.h"
-#include "proccontrol/src/response.h"
-#include "proccontrol/src/int_handler.h"
+#include "sysv.h"
+#include "response.h"
+#include "int_handler.h"
 
 #include <algorithm>
 #include <cstring>
@@ -282,10 +282,16 @@ bool sysv_process::refresh_libraries(set<int_library *> &added_libs,
          // Note: we set them all to "I'm a shared library"; the a.out is overridden below.
 
          lib = new int_library(ll->getName(), true, ll->getCodeLoadAddr(), ll->getDynamicAddr());
+         lib->setMapAddress(ll->getMapAddr());
          assert(lib);
          added_libs.insert(lib);
          ll->setUpPtr((void *) lib);
-         mem->libs.insert(lib);
+         mem->addLibrary(lib);
+      }
+      if (!lib->mapAddress()) {
+         lib->setMapAddress(ll->getMapAddr());
+         lib->setLoadAddress(ll->getCodeLoadAddr());
+         lib->setDynamicAddress(ll->getDynamicAddr());
       }
       lib->setMark(true);
    }
@@ -299,8 +305,9 @@ bool sysv_process::refresh_libraries(set<int_library *> &added_libs,
       }
       pthrd_printf("Didn't find old library %s at %lx, unloading\n",
                    lib->getName().c_str(), lib->getAddr());
+      i++;
       rmd_libs.insert(lib);
-      mem->libs.erase(i++);
+      mem->rmLibrary(lib);
    }
 
    if (!aout) {

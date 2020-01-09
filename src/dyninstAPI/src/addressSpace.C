@@ -844,6 +844,10 @@ bool AddressSpace::isData(const Address addr) const {
    return false;
 }
 
+bool AddressSpace::isReadOnly(const Address ) const {
+   return false;
+}
+
 bool AddressSpace::isValidAddress(const Address addr) const {
    mapped_object *obj = findObject(addr);
    if (!obj) return false;
@@ -1388,11 +1392,10 @@ void trampTrapMappings::allocateTable()
    table_header = proc()->inferiorMalloc(table_allocated * entry_size + 
                                          sizeof(trap_mapping_header));
    trap_mapping_header header;
+   memset(&header, 0, sizeof(header));
    header.signature = TRAP_HEADER_SIG;
    header.num_entries = table_mutatee_size;
    header.pos = -1;
-   header.low_entry = 0;
-   header.high_entry = 0;
 
    bool result = proc()->writeDataSpace((void *) table_header, 
                                         sizeof(trap_mapping_header),
@@ -1696,8 +1699,14 @@ bool AddressSpace::relocate() {
         unsigned int num = modFuncs.size();
         FuncSet overlappingFuncs;
         for (FuncSet::iterator iter2 = modFuncs.begin(); iter2 != modFuncs.end(); ++iter2) {
-           block_instance *entry = (*iter2)->entryBlock();
-           entry->getFuncs(std::inserter(overlappingFuncs,overlappingFuncs.begin()));
+//           block_instance *entry = (*iter2)->entryBlock();
+//           entry->getFuncs(std::inserter(overlappingFuncs,overlappingFuncs.begin()));
+           // Check whether any blocks in the function are are members of any other functions
+            func_instance* curFunc = *iter2;
+            for (auto iter3 = curFunc->blocks().begin(); iter3 != curFunc->blocks().end(); ++iter3) {
+                block_instance* curBlock = SCAST_BI(*iter3);
+                curBlock->getFuncs(std::inserter(overlappingFuncs,overlappingFuncs.begin()));
+           }
         }
         modFuncs.insert(overlappingFuncs.begin(), overlappingFuncs.end());
         if (num < modFuncs.size()) {
@@ -1849,6 +1858,7 @@ bool AddressSpace::relocateInt(FuncSet::const_iterator begin, FuncSet::const_ite
              orig = curAddr;
              mapped_object *obj = findObject(curAddr);
              if (!obj) break;
+			 if(!(obj->parse_img()->isParsed())) break;
              block = obj->findOneBlockByAddr(curAddr);
              func = tframe.getFunc();
              offset = 0;

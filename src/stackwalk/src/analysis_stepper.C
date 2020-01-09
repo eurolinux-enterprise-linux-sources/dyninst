@@ -61,6 +61,7 @@ std::map<string, CodeSource*> AnalysisStepperImpl::srcs;
 std::map<string, SymReader*> AnalysisStepperImpl::readers;
 
 
+
 AnalysisStepperImpl::AnalysisStepperImpl(Walker *w, AnalysisStepper *p) :
    FrameStepper(w),
    parent(p)
@@ -284,7 +285,16 @@ std::set<AnalysisStepperImpl::height_pair_t> AnalysisStepperImpl::analyzeFunctio
    //Since there is only one region, there is only one block with the offset
     // Not actually true; overlapping code is always possible.
    set<ParseAPI::Block*> blocks;
-   obj->findBlocks(region, callSite, blocks);
+   for(auto i = func->blocks().begin();
+       i != func->blocks().end();
+       ++i)
+   {
+     if((*i)->start() <= callSite && (*i)->end() > callSite)
+     {
+       blocks.insert(*i);
+     }
+   }
+   //obj->findBlocks(region, callSite, blocks);
    if(blocks.size() == 0) {
       sw_printf("[%s:%u] - Function at entry point %lx did not contain call site %lx\n", FILE__,
                 __LINE__, entry_addr, callSite);
@@ -376,7 +386,7 @@ bool AnalysisStepperImpl::isPrevInstrACall(Address addr, Address & target)
 
 std::vector<AnalysisStepperImpl::registerState_t> AnalysisStepperImpl::fullAnalyzeFunction(std::string name, Offset callSite)
 {
-  std::vector<registerState_t> heights;
+   std::vector<registerState_t> heights;
   
    CodeObject *obj = getCodeObject(name);
    if (!obj) {
@@ -429,7 +439,7 @@ gcframe_ret_t AnalysisStepperImpl::getFirstCallerFrameArch(const std::vector<reg
 							   Frame& out)
 {
   ProcessState *proc = getProcessState();
-    
+
   bool result = false;
 
   vector<registerState_t>::const_iterator heightIter;
@@ -439,24 +449,25 @@ gcframe_ret_t AnalysisStepperImpl::getFirstCallerFrameArch(const std::vector<reg
     out_sp = 0,
     out_ra = 0;
     location_t out_ra_loc;
-	
+
     StackAnalysis::Height sp_height = heightIter->second;
-	
-	
+
+
     // SP height is the distance from the last SP of the previous frame
     // to the SP in this frame at the current offset.
     // Since we are walking to the previous frame,
     // we subtract this height to get the outgoing SP
     MachRegisterVal sp_base;
-	
-    proc->getRegValue(heightIter->first, in.getThread(), sp_base);
+
+    if (heightIter->first.type() != Absloc::Register) continue;
+    proc->getRegValue(heightIter->first.reg(), in.getThread(), sp_base);
     out_sp = sp_base - sp_height.height();
 
     if(heightIter->second.height() == -1 * (long)proc->getAddressWidth())
     {
       // FP candidate: register pointing to entry SP
        sw_printf("[%s:%u] - Found candidate FP %s, height 0x%lx\n", __FILE__, __LINE__,
-                 heightIter->first.name().c_str(), (unsigned long) heightIter->second.height());
+                 heightIter->first.format().c_str(), (unsigned long) heightIter->second.height());
     }
 
     // Since we know the outgoing SP,

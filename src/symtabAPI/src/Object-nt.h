@@ -52,7 +52,6 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <assert.h>
 
@@ -177,7 +176,7 @@ class Object : public AObject
 
  public:
     SYMTAB_EXPORT Object(MappedFile *, bool defensive, 
-                         void (*)(const char *) = log_msg, bool alloc_syms = true);
+                         void (*)(const char *) = log_msg, bool alloc_syms = true, Symtab* st = NULL);
   
     SYMTAB_EXPORT virtual ~Object( void );
 	SYMTAB_EXPORT std::string getFileName() const { return mf->filename(); }
@@ -195,19 +194,19 @@ class Object : public AObject
     //+ desc.loadAddr(); } //laodAddr is always zero in our fake address space.
     // TODO. Change these later.
     SYMTAB_EXPORT Offset getLoadAddress() const { return imageBase; }
+	SYMTAB_EXPORT Offset getPreferedBase() const { return preferedBase; }
     SYMTAB_EXPORT Offset getEntryAddress() const { return getEntryPoint(); }
     SYMTAB_EXPORT Offset getBaseAddress() const { return get_base_addr(); }
     SYMTAB_EXPORT Offset getTOCoffset(Offset /*ignored*/) const { return 0; }
     SYMTAB_EXPORT ObjectType objType() const;
     SYMTAB_EXPORT const char *interpreter_name() const { return NULL; }
     SYMTAB_EXPORT dyn_hash_map <std::string, LineInformation> &getLineInfo();
-    SYMTAB_EXPORT void parseTypeInfo(Symtab *obj);
-    SYMTAB_EXPORT virtual Dyninst::Architecture getArch();   
+    SYMTAB_EXPORT void parseTypeInfo();
+    SYMTAB_EXPORT virtual Dyninst::Architecture getArch() const;
     SYMTAB_EXPORT void    ParseGlobalSymbol(PSYMBOL_INFO pSymInfo);
     SYMTAB_EXPORT const std::vector<Offset> &getPossibleMains() const   { return possible_mains; }
     SYMTAB_EXPORT void getModuleLanguageInfo(dyn_hash_map<std::string, supportedLanguages> *mod_langs);
-    SYMTAB_EXPORT bool emitDriver(Symtab *obj, std::string fName, 
-		                            std::vector<Symbol *>&allSymbols, unsigned flag);
+    SYMTAB_EXPORT bool emitDriver(std::string fName, std::vector<Symbol *> &allSymbols, unsigned flag);
     SYMTAB_EXPORT unsigned int getSecAlign() const {return SecAlignment;}
     SYMTAB_EXPORT void insertPrereqLibrary(std::string lib);
     virtual char *mem_image() const 
@@ -235,16 +234,23 @@ class Object : public AObject
 	SYMTAB_EXPORT void rebase(Offset off);
 	SYMTAB_EXPORT Region* findRegionByName(const std::string& name) const;
 	SYMTAB_EXPORT void applyRelocs(Region* relocs, Offset delta);
+	SYMTAB_EXPORT virtual void getSegmentsSymReader(std::vector<SymSegment> &);
 
 private:
     SYMTAB_EXPORT void    ParseSymbolInfo( bool );
-    SYMTAB_EXPORT void    parseFileLineInfo(Symtab *, dyn_hash_map<std::string, LineInformation> &);
+    SYMTAB_EXPORT void parseFileLineInfo();
+    SYMTAB_EXPORT void parseLineInfoForAddr(Offset)
+    {
+      parseFileLineInfo();
+    }
+    
     SYMTAB_EXPORT void    FindInterestingSections( bool, bool );
     Region *          findEnclosingRegion(const Offset where);
     void AddTLSFunctions();
 	DWORD* get_dword_ptr(Offset rva);
     Offset baseAddr;     // location of this object in mutatee address space
 
+	Offset preferedBase; // Virtual address at which the binary is prefered to be loaded
     Offset imageBase; // Virtual Address at which the binary is loaded in its address space
 
     PIMAGE_NT_HEADERS   peHdr;      // PE file headers

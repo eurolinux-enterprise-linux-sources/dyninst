@@ -94,25 +94,27 @@ class Absloc {
      {};
     
  DATAFLOW_EXPORT Absloc(Address addr) :
-  type_(Heap),
-     reg_(),
-     off_(-1),
-     region_(-1),
-     func_(NULL),
+    type_(Heap),
+    reg_(),
+    off_(-1),
+    region_(-1),
+    func_(NULL),
     addr_(addr) {};
  DATAFLOW_EXPORT Absloc(int o,
 			int r,
 			ParseAPI::Function *f) :
     type_(Stack),
-       reg_(),
-      off_(o),
-      region_(r),
-       func_(f),
-       addr_(-1) {};
+    reg_(),
+    off_(o),
+    region_(r),
+    func_(f),
+    addr_(-1) {};
     
   DATAFLOW_EXPORT std::string format() const;
 
   DATAFLOW_EXPORT const Type &type() const { return type_; };
+
+  DATAFLOW_EXPORT bool isValid() const { return type_ != Unknown; };
 
   DATAFLOW_EXPORT const MachRegister &reg() const { assert(type_ == Register); return reg_; };
 
@@ -176,6 +178,11 @@ class Absloc {
       return 'u';
     }
   };
+
+  friend std::ostream &operator<<(std::ostream &os, const Absloc &a) {
+    os << a.format();
+    return os;
+  }
 
  private:
   Type type_;
@@ -251,6 +258,10 @@ class AbsRegion {
   DATAFLOW_EXPORT AST::Ptr generator() const { return generator_; }
 
   DATAFLOW_EXPORT bool isImprecise() const { return type_ != Absloc::Unknown; }
+  friend std::ostream &operator<<(std::ostream &os, const AbsRegion &a) {
+    os << a.format();
+    return os;
+  }
 
  private:
   // Type is for "we're on the stack but we don't know where".
@@ -272,6 +283,12 @@ class AbsRegion {
 class Assignment {
  public:
   typedef boost::shared_ptr<Assignment> Ptr;
+  struct AssignmentPtrHasher {
+    size_t operator() (const Ptr& ap) const {
+      return (size_t)ap.get();
+    }
+  };
+
   typedef std::set<AbsRegion> Aliases;
 
   DATAFLOW_EXPORT const std::vector<AbsRegion> &inputs() const { return inputs_; }
@@ -316,6 +333,20 @@ class Assignment {
        block_(b),
        out_(o) {};
 
+  DATAFLOW_EXPORT static Assignment::Ptr makeAssignment(const InstructionAPI::Instruction::Ptr i,
+                             const Address a,
+                             ParseAPI::Function *f,
+                             ParseAPI::Block *b,
+                             const std::vector<AbsRegion> &ins,
+                             const AbsRegion &o);
+
+  DATAFLOW_EXPORT static Assignment::Ptr makeAssignment(const InstructionAPI::Instruction::Ptr i,
+                             const Address a,
+                             ParseAPI::Function *f,
+                             ParseAPI::Block *b,
+                             const AbsRegion &o);
+
+
   // Internally used method; add a dependence on 
   // a new abstract region. If this is a new region
   // we'll add it to the dependence list. Otherwise 
@@ -327,6 +358,10 @@ class Assignment {
   DATAFLOW_EXPORT ParseAPI::Function *func() const { return func_; }
 
   DATAFLOW_EXPORT ParseAPI::Block *block() const { return block_; }
+  friend std::ostream &operator<<(std::ostream &os, const Assignment::Ptr &a) {
+    os << a->format();
+    return os;
+  }
 
  private:
   InstructionAPI::Instruction::Ptr insn_;
@@ -339,13 +374,21 @@ class Assignment {
   AbsRegion out_;
 };
 
+// compare assignments by value.
+// note this is a fast comparison--it checks output and address only.
+struct AssignmentPtrValueComp {
+    bool operator()(const Assignment::Ptr& a, const Assignment::Ptr& b) const {
+        if (a->addr() < b->addr()) { return true; }
+        if (b->addr() < a->addr()) { return false; }
+        if (a->out() < b->out()) { return true; }
+        return false;
+    }
+};
+
 // Dyninst namespace
 };
 
 
-std::ostream &operator<<(std::ostream &os, const Dyninst::Absloc &a);
-std::ostream &operator<<(std::ostream &os, const Dyninst::AbsRegion &a);
-std::ostream &operator<<(std::ostream &os, const Dyninst::Assignment::Ptr &a);
 
 #endif
 

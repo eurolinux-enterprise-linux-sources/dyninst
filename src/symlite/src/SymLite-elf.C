@@ -28,7 +28,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "symlite/h/SymLite-elf.h"
+#include "SymLite-elf.h"
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -292,6 +292,28 @@ bool SymElf::getSegment(unsigned num, SymSegment &seg)
 unsigned SymElf::getAddressWidth()
 {
    return elf->wordSize();
+}
+
+bool SymElf::getABIVersion(int &major, int &minor) const
+{
+   if (elf->e_machine() == EM_PPC64 && elf->e_flags() == 0x2) {
+      major = elf->e_flags();
+      minor = 0;
+      return true;
+   }
+   else {
+      return false;
+   }
+}
+
+bool SymElf::isBigEndianDataEncoding() const
+{
+   return (elf->e_endian() != 0);
+}
+
+Architecture SymElf::getArchitecture() const
+{
+    return elf->getArch();
 }
 
 unsigned long SymElf::getSymbolSize(const Symbol_t &sym)

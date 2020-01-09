@@ -35,6 +35,7 @@
 
 #include "dyninstAPI/src/addressSpace.h"
 #include "dyninstAPI/src/function.h"
+#include "common/src/arch.h"
 
 using namespace Dyninst;
 using namespace Relocation;
@@ -125,7 +126,6 @@ bool SpringboardBuilder::generate(std::list<codeGen> &springboards,
 bool InstalledSpringboards::addFunc(func_instance* func)
 {
   if(!addBlocks(func, func->blocks().begin(), func->blocks().end())) return false;
-  nextFuncID_++;
   return true;
 }
 
@@ -178,20 +178,18 @@ bool InstalledSpringboards::addBlocks(func_instance* func, BlockIter begin, Bloc
 
     // Extend the block to include any subsequent no-ops that are not part of other blocks
     int size = bbl->size();
-    if (size < 5) {
-        ParseAPI::CodeObject* co = func->ifunc()->obj();
-        ParseAPI::CodeRegion* cr = func->ifunc()->region();
-        std::set<ParseAPI::Block*> blocks;
+    ParseAPI::CodeObject* co = func->ifunc()->obj();
+    ParseAPI::CodeRegion* cr = func->ifunc()->region();
+    std::set<ParseAPI::Block*> blocks;
+    co->findBlocks(cr, end, blocks);
+    while (isNoneContained(blocks) && cr->contains(end)) {
+        end++;
+        size++;
+        blocks.clear();
         co->findBlocks(cr, end, blocks);
-        while (isNoneContained(blocks) && cr->contains(end) && (size < 5)) {
-            end++;
-            size++;
-            blocks.clear();
-            co->findBlocks(cr, end, blocks);
-        }
     }
 
-    SpringboardInfo* info = new SpringboardInfo(nextFuncID_, func);
+    SpringboardInfo* info = new SpringboardInfo(func->addr(), func);
 
     // If we extended the block, remember that range
     if (end > bbl->end()) {
@@ -257,7 +255,6 @@ SpringboardBuilder::generateSpringboard(std::list<codeGen> &springboards,
 					const SpringboardReq &r,
                                         SpringboardMap &input) {
    codeGen gen;
-
    bool usedTrap = false;
    // Arbitrarily select the first function containing this springboard, since only one can win. 
    generateBranch(r.from, r.destinations.begin()->second, gen);
@@ -268,8 +265,8 @@ SpringboardBuilder::generateSpringboard(std::list<codeGen> &springboards,
       // Fine. Let's do the trap thing. 
 
       usedTrap = true;
-      if (conflict(r.from, r.from + 1, r.fromRelocatedCode, r.func, r.priority)) return Failed;
-      if(!addrSpace_->canUseTraps()) return Failed;
+      if (conflict(r.from, r.from + 1, r.fromRelocatedCode, r.func, r.priority)) { return Failed; }
+      if(!addrSpace_->canUseTraps()) { return Failed; }
       
       generateTrap(r.from, r.destinations.begin()->second, gen);
       size = 1;
@@ -280,7 +277,9 @@ SpringboardBuilder::generateSpringboard(std::list<codeGen> &springboards,
    }
    
    registerBranch(r.from, r.from + size, r.destinations, r.fromRelocatedCode, r.func, r.priority);
-   springboards.push_back(gen);
+   if (!usedTrap) {
+       springboards.push_back(gen);
+   }
 
    return Succeeded;
 }

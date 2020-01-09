@@ -1,28 +1,28 @@
 /*
  * See the dyninst/COPYRIGHT file for copyright information.
- * 
+ *
  * We provide the Paradyn Tools (below described as "Paradyn")
  * on an AS IS basis, and do not warrant its validity or performance.
  * We reserve the right to update, modify, or discontinue this
  * software at any time.  We shall have no obligation to supply such
  * updates or modifications or any other form of support to you.
- * 
+ *
  * By your use of Paradyn, you understand and agree that we (or any
  * other person or entity with proprietary rights in Paradyn) are
  * under no obligation to provide either maintenance services,
  * update services, notices of latent defects, or correction of
  * defects for Paradyn.
- * 
+ *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
  * version 2.1 of the License, or (at your option) any later version.
- * 
+ *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * Lesser General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
@@ -38,12 +38,14 @@ using namespace DataflowAPI;
 bitArray ABI::callRead_;
 bitArray ABI::callWritten_;
 bitArray ABI::returnRead_;
+bitArray ABI::returnRegs_;
 bitArray ABI::syscallRead_;
 bitArray ABI::syscallWritten_;
 
 bitArray ABI::callRead64_;
 bitArray ABI::callWritten64_;
 bitArray ABI::returnRead64_;
+bitArray ABI::returnRegs64_;
 bitArray ABI::syscallRead64_;
 bitArray ABI::syscallWritten64_;
 bitArray ABI::allRegs_;
@@ -53,13 +55,12 @@ ABI* ABI::globalABI64_ = NULL;
 
 int ABI::getIndex(MachRegister machReg){
 	if (index->find(machReg) == index->end()){
-		fprintf(stderr,"cannot find %s\n", machReg.name().c_str());
-		assert(0);
+	    return -1;
 	}
     	return (*index)[machReg];
 }
-std::map<MachRegister,int>* ABI::getIndexMap(){ 
-	return index; 
+std::map<MachRegister,int>* ABI::getIndexMap(){
+	return index;
 }
 
 ABI* ABI::getABI(int addr_width){
@@ -79,6 +80,13 @@ ABI* ABI::getABI(int addr_width){
 	globalABI_->index = &machRegIndex_ppc();
 	globalABI64_->index = &machRegIndex_ppc();
 
+#endif
+
+//#warning "This is not verified yet!"
+#if defined(arch_aarch64)
+	globalABI64_->addr_width = 8;
+	globalABI_->index = &machRegIndex_ppc();
+	globalABI64_->index = &machRegIndex_ppc();
 #endif
 
 	initialize32();
@@ -110,7 +118,7 @@ const bitArray &ABI::getCallWrittenRegisters() const {
         return callWritten_;
     }
 }
-    
+
 const bitArray &ABI::getReturnReadRegisters() const {
     if (addr_width == 4)
         return returnRead_;
@@ -119,6 +127,17 @@ const bitArray &ABI::getReturnReadRegisters() const {
     else {
         assert(0);
         return returnRead_;
+    }
+}
+
+const bitArray &ABI::getReturnRegisters() const {
+    if (addr_width == 4)
+        return returnRegs_;
+    else if (addr_width == 8)
+        return returnRegs64_;
+    else {
+        assert(0);
+        return returnRegs_;
     }
 }
 
@@ -152,7 +171,7 @@ const bitArray &ABI::getAllRegs() const
    else {
       assert(0);
       return allRegs_;
-   }   
+   }
 }
 
 bitArray ABI::getBitArray()  {
@@ -160,6 +179,10 @@ bitArray ABI::getBitArray()  {
 }
 #if defined(arch_x86) || defined(arch_x86_64)
 void ABI::initialize32(){
+
+   returnRegs_ = getBitArray(machRegIndex_x86().size());
+   returnRegs_[machRegIndex_x86()[x86::eax]] = true;
+
 
    returnRead_ = getBitArray(machRegIndex_x86().size());
    // Callee-save registers...
@@ -169,21 +192,21 @@ void ABI::initialize32(){
    // And return value
    returnRead_[machRegIndex_x86()[x86::eax]] = true;
    // Return reads no registers
-   
+
    callRead_ = getBitArray(machRegIndex_x86().size());
    // CallRead reads no registers
    // We wish...
    callRead_[machRegIndex_x86()[x86::ecx]] = true;
    callRead_[machRegIndex_x86()[x86::edx]] = true;
-   
+
    // PLT entries use ebx
    callRead_[machRegIndex_x86()[x86::ebx]] = true;
-   
+
    // TODO: Fix this for platform-specific calling conventions
-   
+
    // Assume calls write flags
    callWritten_ = callRead_;
-   
+
    callWritten_[machRegIndex_x86()[x86::of]] = true;
    callWritten_[machRegIndex_x86()[x86::sf]] = true;
    callWritten_[machRegIndex_x86()[x86::zf]] = true;
@@ -240,6 +263,11 @@ void ABI::initialize32(){
 
 void ABI::initialize64(){
 
+    returnRegs64_ = getBitArray(machRegIndex_x86_64().size());
+    returnRegs64_[machRegIndex_x86_64()[x86_64::rax]] = true;
+    returnRegs64_[machRegIndex_x86_64()[x86_64::rdx]] = true;
+
+
     returnRead64_ = getBitArray(machRegIndex_x86_64().size());
     returnRead64_[machRegIndex_x86_64()[x86_64::rax]] = true;
     returnRead64_[machRegIndex_x86_64()[x86_64::rcx]] = true; //Not correct, temporary
@@ -254,7 +282,7 @@ void ABI::initialize64(){
     returnRead64_[machRegIndex_x86_64()[x86_64::xmm0]] = true;
     returnRead64_[machRegIndex_x86_64()[x86_64::xmm1]] = true;
 
-    
+
     callRead64_ = getBitArray(machRegIndex_x86_64().size());
     callRead64_[machRegIndex_x86_64()[x86_64::rax]] = true;
     callRead64_[machRegIndex_x86_64()[x86_64::rcx]] = true;
@@ -263,7 +291,7 @@ void ABI::initialize64(){
     callRead64_[machRegIndex_x86_64()[x86_64::r9]] = true;
     callRead64_[machRegIndex_x86_64()[x86_64::rdi]] = true;
     callRead64_[machRegIndex_x86_64()[x86_64::rsi]] = true;
-    
+
     callRead64_[machRegIndex_x86_64()[x86_64::xmm0]] = true;
     callRead64_[machRegIndex_x86_64()[x86_64::xmm1]] = true;
     callRead64_[machRegIndex_x86_64()[x86_64::xmm2]] = true;
@@ -301,14 +329,16 @@ void ABI::initialize64(){
     syscallWritten64_ = syscallRead64_;
 
     allRegs64_ = getBitArray(machRegIndex_x86_64().size()).set();
-} 
+}
 
-#endif  
+#endif
 
 #if defined(arch_power)
 void ABI::initialize32(){
+    returnRegs_ = getBitArray(machRegIndex_ppc().size());
+    returnRegs_[machRegIndex_ppc()[ppc32::r3]] = true;
 
-   returnRead_ = getBitArray(machRegIndex_ppc().size());
+    returnRead_ = getBitArray(machRegIndex_ppc().size());
     // Return reads r3, r4, fpr1, fpr2
     returnRead_[machRegIndex_ppc()[ppc32::r3]] = true;
     returnRead_[machRegIndex_ppc()[ppc32::r4]] = true;
@@ -318,9 +348,9 @@ void ABI::initialize32(){
     // Calls
     callRead_ = getBitArray(machRegIndex_ppc().size());
     // Calls read r3 -> r10 (parameters), fpr1 -> fpr13 (volatile FPRs)
-/*    for (unsigned i = r3; i <= r10; i++) 
+/*    for (unsigned i = r3; i <= r10; i++)
         callRead_[i] = true;
-    for (unsigned i = fpr1; i <= fpr13; i++) 
+    for (unsigned i = fpr1; i <= fpr13; i++)
         callRead_[i] = true;*/
 
     callRead_[machRegIndex_ppc()[ppc32::r3]] = true;
@@ -392,6 +422,8 @@ void ABI::initialize32(){
 }
 
 void ABI::initialize64(){
+    returnRegs64_ = getBitArray(machRegIndex_ppc_64().size());
+    returnRegs64_[machRegIndex_ppc_64()[ppc64::r3]] = true;
 
     returnRead64_ = getBitArray(machRegIndex_ppc_64().size());
     // Return reads r3, r4, fpr1, fpr2
@@ -463,5 +495,16 @@ void ABI::initialize64(){
     syscallWritten64_ = getBitArray(machRegIndex_ppc_64().size()).set();
 
     allRegs64_ = getBitArray(machRegIndex_ppc_64().size()).set();
+}
+#endif
+
+//#warning "This is not verified!"
+#if defined(arch_aarch64)
+void ABI::initialize32(){
+	assert(0);
+}
+
+void ABI::initialize64(){
+	assert(0);
 }
 #endif

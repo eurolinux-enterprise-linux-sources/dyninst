@@ -164,7 +164,7 @@ bool baseTramp::shouldRegenBaseTramp(registerSpace *rs)
                          (definedRegs[reg->encoding()] ? 1 : 0),
                          reg->offLimits);
       }
-      if (!reg->liveState == registerSlot::spilled &&
+      if (reg->liveState != registerSlot::spilled &&
           definedRegs[reg->encoding()])
       {
          regalloc_printf("[%s:%u] - Decided not to save a defined register %d. "
@@ -307,78 +307,17 @@ bool baseTramp::generateCodeInlined(codeGen &gen,
 
    AstNodePtr minis = AstNode::sequenceNode(miniTramps);
 
-   // Let's build the tramp guard addr (if we want it)
-   AstNodePtr threadIndex;
-   AstNodePtr trampGuardAddr;
-
-   if (guarded() &&
-       minis->containsFuncCall() &&
-       (proc()->trampGuardAST() != AstNodePtr())) {
-      // If we don't have a function call, then we don't
-      // need the guard....
-
-      // Now, the guard flag. 
-      // If we're multithreaded, we need to index off
-      // the base address.
-
-      if (!threaded()) {
-         // ...
-      }
-      else if (gen.thread()) {
-         // Constant override...
-         threadIndex = AstNode::operandNode(AstNode::Constant,
-                                            (void *)(long)gen.thread()->getIndex());
-      }
-      else {
-         // TODO: we can get clever with this, and have the generation of
-         // the thread index depend on whether gen has a thread defined...
-         // For that, we'd need an AST thread index node. Just something
-         // to think about. Maybe a child of funcNode?
-         threadIndex = AstNode::threadIndexNode();
-      }
-        
-      if (threadIndex) {
-         trampGuardAddr = AstNode::operandNode(AstNode::DataIndir,
-                                               AstNode::operatorNode(plusOp,
-                                                                     AstNode::operatorNode(timesOp,
-                                                                                           threadIndex,
-                                                                                           AstNode::operandNode(AstNode::Constant, 
-                                                                                                                (void *)sizeof(unsigned))),
-                                                                     proc()->trampGuardAST()));
-
-         /* At the moment, we can't directly specify the fact
-            that we're loading 4 bytes instead of a normal
-            (address-width) word. */
-         trampGuardAddr->setType( BPatch::getBPatch()->builtInTypes->findBuiltInType( "unsigned int" ) );
-      }
-      else {
-         trampGuardAddr = AstNode::operandNode(AstNode::DataIndir,
-                                               proc()->trampGuardAST());
-         trampGuardAddr->setType( BPatch::getBPatch()->builtInTypes->findBuiltInType( "unsigned int" ) );
-      }
-   }
-
-
    AstNodePtr baseTrampSequence;
    pdvector<AstNodePtr > baseTrampElements;
 
-   if (trampGuardAddr) {
-      // First, set it to 0
-      baseTrampElements.push_back(AstNode::operatorNode(storeOp, 
-                                                        trampGuardAddr,
-                                                        AstNode::operandNode(AstNode::Constant,
-                                                                             (void *)0)));
-   }
     
    // Run the minitramps
    baseTrampElements.push_back(minis);
+   vector<AstNodePtr> empty_args;
     
-   if (trampGuardAddr) {
-      // And set the tramp guard flag to 1
-      baseTrampElements.push_back(AstNode::operatorNode(storeOp,
-                                                        trampGuardAddr,
-                                                        AstNode::operandNode(AstNode::Constant,
-                                                                             (void *)1)));
+   if (guarded() &&
+       minis->containsFuncCall()) {
+     baseTrampElements.push_back(AstNode::funcCallNode("DYNINST_unlock_tramp_guard", empty_args));
    }
 
    baseTrampSequence = AstNode::sequenceNode(baseTrampElements);
@@ -387,16 +326,16 @@ bool baseTramp::generateCodeInlined(codeGen &gen,
 
    // If trampAddr is non-NULL, then we wrap this with an IF. If not, 
    // we just run the minitramps.
-   if (trampGuardAddr == NULL) {
-      baseTrampAST = baseTrampSequence;
-      baseTrampSequence.reset();
+   if (guarded() &&
+       minis->containsFuncCall()) {
+      baseTrampAST = AstNode::operatorNode(ifOp,
+                                           // trampGuardAddr,
+					   AstNode::funcCallNode("DYNINST_lock_tramp_guard", empty_args),
+                                           baseTrampSequence);
    }
    else {
-      // Oh, boy. 
-      // Short form of the above
-      baseTrampAST = AstNode::operatorNode(ifOp,
-                                           trampGuardAddr,
-                                           baseTrampSequence);
+      baseTrampAST = baseTrampSequence;
+      baseTrampSequence.reset();
    }
 
 
@@ -406,14 +345,18 @@ bool baseTramp::generateCodeInlined(codeGen &gen,
    // MUST HAPPEN BEFORE THE SAVES, and state should not
    // be reset until AFTER THE RESTORES.
    bool retval = baseTrampAST->initRegisters(gen);
-   generateSaves(gen, gen.rs());
+   if (!gen.insertNaked()) {
+       generateSaves(gen, gen.rs());
+   }
 
    if (!baseTrampAST->generateCode(gen, false)) {
       fprintf(stderr, "Gripe: base tramp creation failed\n");
       retval = false;
    }
 
-   generateRestores(gen, gen.rs());
+   if (!gen.insertNaked()) {
+       generateRestores(gen, gen.rs());
+   }
 
    // And now to clean up after us
    //if (minis) delete minis;

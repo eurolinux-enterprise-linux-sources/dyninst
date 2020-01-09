@@ -94,15 +94,17 @@ BPatch_function *BPatch_addressSpace::findOrCreateBPFunc(Dyninst::PatchAPI::Patc
       return bpf;
    }
 
-   // Find the module that contains the function
-   if (bpmod == NULL && fi->mod() != NULL) {
-      bpmod = getImage()->findModule(fi->mod()->fileName().c_str());
+   // check to see if the func_instance refers to a different
+   // module, and that module contains a bpatch_func
+   BPatch_module* containing = NULL;
+   if (fi->mod() != NULL) {
+      containing = getImage()->findModule(fi->mod()->fileName().c_str());
    }
 
    // findModule has a tendency to make new function objects... so
    // check the map again
-   if (bpmod->func_map.count(ifunc)) {
-      BPatch_function *bpf = bpmod->func_map[ifunc];
+   if (containing->func_map.count(ifunc)) {
+      BPatch_function *bpf = containing->func_map[ifunc];
       assert(bpf);
       assert(bpf->func == ifunc);
       return bpf;
@@ -244,6 +246,15 @@ BPatch_process *BPatchSnippetHandle::getProcess()
 BPatch_Vector<BPatch_thread *> &BPatchSnippetHandle::getCatchupThreads()
 {
    return catchup_threads;
+}
+
+BPatchSnippetHandle::thread_iter BPatchSnippetHandle::getCatchupThreads_begin()
+{
+    return catchup_threads.begin();
+}
+BPatchSnippetHandle::thread_iter BPatchSnippetHandle::getCatchupThreads_end()
+{
+    return catchup_threads.end();
 }
 
 // Return true if any sub-minitramp uses a trap? Other option
@@ -529,21 +540,23 @@ bool BPatch_addressSpace::revertWrapFunction(BPatch_function *original)
 
 bool BPatch_addressSpace::getAddressRanges( const char * fileName,
       unsigned int lineNo,
-      std::vector< std::pair< unsigned long, unsigned long > > & ranges )
+      std::vector< SymtabAPI::AddressRange > & ranges )
 {
    unsigned int originalSize = ranges.size();
-   BPatch_Vector< BPatch_module * > * modules = image->getModules();
+   image->getAddressRanges(fileName, lineNo, ranges);
+
+   //   BPatch_Vector< BPatch_module * > * modules = image->getModules();
 
    /* Iteratate over the modules, looking for addr in each. */
-   for ( unsigned int i = 0; i < modules->size(); i++ ) {
-      BPatch_module *m = (*modules)[i];
-      m->getAddressRanges(fileName, lineNo, ranges);
-   }
-
+   //for ( unsigned int i = 0; i < modules->size(); i++ ) {
+   //   BPatch_module *m = (*modules)[i];
+   //   m->getAddressRanges(fileName, lineNo, ranges);
+   //}
    if ( ranges.size() != originalSize ) { return true; }
 
    return false;
 } /* end getAddressRanges() */
+
 
 bool BPatch_addressSpace::getSourceLines( unsigned long addr,
       BPatch_Vector< BPatch_statement > & lines )
@@ -887,11 +900,11 @@ BPatchSnippetHandle *BPatch_addressSpace::insertSnippet(const BPatch_snippet &ex
       BPatch_function *f;
       for (unsigned i=0; i<points.size(); i++) {
          f = points[i]->getFunction();
-         const char *sname = f->func->prettyName().c_str();
+         const string sname = f->func->prettyName();
          inst_printf("[%s:%u] - %d. Insert instrumentation at function %s, "
                "address %p, when %d, order %d\n",
                FILE__, __LINE__, i,
-               sname, points[i]->getAddress(), (int) when, (int) order);
+               sname.c_str(), points[i]->getAddress(), (int) when, (int) order);
 
       }
   }
@@ -1004,43 +1017,67 @@ bool BPatch_addressSpace::isStaticExecutable() {
 #include "registerSpace.h"
 
 #if defined(cap_registers)
-bool BPatch_addressSpace::getRegisters(std::vector<BPatch_register> &regs) {
-   if (registers_.size()) {
-       regs = registers_;
-       return true;
-   }
-
-   std::vector<AddressSpace *> as;
-
-   getAS(as);
-   assert(as.size());
-
-   registerSpace *rs = registerSpace::getRegisterSpace(as[0]);
-
-   for (unsigned i = 0; i < rs->realRegs().size(); i++) {
-       // Let's do just GPRs for now
-       registerSlot *regslot = rs->realRegs()[i];
-       registers_.push_back(BPatch_register(regslot->name, regslot->number));
-   }
-
-// Temporary override: also return EFLAGS though it's certainly not a 
+void BPatch_addressSpace::init_registers()
+{
+    if(registers_.size()) return;
+    std::vector<AddressSpace *> as;
+    
+    getAS(as);
+    assert(as.size());
+    
+    registerSpace *rs = registerSpace::getRegisterSpace(as[0]);
+    
+    for (unsigned i = 0; i < rs->realRegs().size(); i++) {
+	// Let's do just GPRs for now
+	registerSlot *regslot = rs->realRegs()[i];
+	registers_.push_back(BPatch_register(regslot->name, regslot->number));
+    }
+    
+    // Temporary override: also return EFLAGS though it's certainly not a 
 #if defined(arch_x86) || defined(arch_x86_64)
-   for (unsigned i = 0; i < rs->SPRs().size(); ++i) {
-      if (rs->SPRs()[i]->name == "eflags") {
-         registers_.push_back(BPatch_register(rs->SPRs()[i]->name, 
-                                              rs->SPRs()[i]->number));
-      }
-   }
+    for (unsigned i = 0; i < rs->SPRs().size(); ++i) {
+	if (rs->SPRs()[i]->name == "eflags") {
+	    registers_.push_back(BPatch_register(rs->SPRs()[i]->name, 
+						 rs->SPRs()[i]->number));
+	}
+    }
 #endif
+}
+
+bool BPatch_addressSpace::getRegisters(std::vector<BPatch_register> &regs) {
+   init_registers();
+   regs = registers_;
+   return true;
 
    regs = registers_;
    return true;
 }
+BPatch_addressSpace::register_iter BPatch_addressSpace::getRegisters_begin()
+{
+    init_registers();
+    return registers_.begin();
+}
+BPatch_addressSpace::register_iter BPatch_addressSpace::getRegisters_end()
+{
+    init_registers();
+    return registers_.end();
+}
 #else
+void BPatch_addressSpace::init_registers() {}
 bool BPatch_addressSpace::getRegisters(std::vector<BPatch_register> &) {
     // Empty vector since we're not supporting register objects on
     // these platforms (yet)
    return false;
+}
+BPatch_addressSpace::register_iter BPatch_addressSpace::getRegisters_begin()
+{
+    init_registers();
+    return registers_.begin();
+}
+BPatch_addressSpace::register_iter BPatch_addressSpace::getRegisters_end()
+{
+    init_registers();
+    return registers_.end();
 }
 #endif
 

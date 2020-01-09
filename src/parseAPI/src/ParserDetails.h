@@ -30,7 +30,7 @@
 #ifndef _PARSER_DETAILS_H_
 #define _PARSER_DETAILS_H_
 
-
+#include "IA_IAPI.h"
 
 namespace Dyninst {
 namespace ParseAPI {
@@ -62,18 +62,56 @@ class ParseWorkBundle;
 class ParseWorkElem
 {
  public:
+    /*
+     * NOTE: The order of elements in this enum is critical to parsing order.
+     * The earier an element appear in the enum, the sooner the corresponding 
+     * edges are going to be parsed.
+     *
+     * 1. Our current implementation of non-returning function analysis 
+     * WORK IFF call is prioritized over call_fallthrough.
+     *
+     * 2. We have a tail call heuristics that a jump to its own block is not a tail call.
+     * For this heuristics to be more effective, we want to traverse 
+     * certain intraprocedural edges such as call_fallthrough and cond_not_taken
+     * over potential tail call edges such as cond_taken, br_direct, and br_indirect.
+     *
+     * 3. Jump table analysis would like to have as much intraprocedural control flow
+     * as possible to resolve an indirect jump. So resolve_jump_table is delayed.
+     *
+     * Please make sure to update this comment 
+     * if you change the order of the things appearing in the enum
+     *
+     */
     enum parse_work_order {
         seed_addr = 0,
         ret_fallthrough, /* conditional returns */
+        call,
+        call_fallthrough,
         cond_taken,
         cond_not_taken,
         br_direct,
         br_indirect,
         catch_block,
-        call,
-        call_fallthrough,
+        checked_call_ft,
+	resolve_jump_table, // We want to finish all possible parsing work before parsing jump tables
         __parse_work_end__
     };
+
+    // allow direct access to setting order/frame type..
+    ParseWorkElem(
+            ParseWorkBundle *b, 
+            parse_work_order o,
+            Edge *e, 
+            Address target, 
+            bool resolvable,
+            bool tailcall)
+        : _bundle(b),
+          _edge(e),
+          _targ(target),
+          _can_resolve(resolvable),
+          _tailcall(tailcall),
+          _order(o),
+          _call_processed(false) { }
 
     ParseWorkElem(
             ParseWorkBundle *b, 
@@ -87,7 +125,10 @@ class ParseWorkElem
           _can_resolve(resolvable),
           _tailcall(tailcall),
           _order(__parse_work_end__),
-          _call_processed(false)
+          _call_processed(false),
+	  _cur(NULL),
+	  _ah(NULL)
+
     { 
       if(e) {
         switch(e->type()) {
@@ -100,7 +141,14 @@ class ParseWorkElem
             case INDIRECT:
                 _order = br_indirect; break;
             case DIRECT:
-                _order = br_direct; break;
+                {
+                    if (tailcall) {
+                        _order = call;
+                    } else {
+                        _order = br_direct; 
+                    }
+                    break;
+                }
             case FALLTHROUGH:
                 _order = ret_fallthrough; break;
             case CATCH:
@@ -123,8 +171,30 @@ class ParseWorkElem
           _can_resolve(false),
           _tailcall(false),
           _order(__parse_work_end__),
-          _call_processed(false)
+          _call_processed(false),
+	  _cur(NULL),
+	  _ah(NULL)
     { } 
+
+    // This work element is a continuation of
+    // parsing jump tables
+    ParseWorkElem(ParseWorkBundle *bundle, Block *b, const InsnAdapter::IA_IAPI& ah)
+         : _bundle(bundle),
+          _edge(NULL),
+          _targ((Address)-1),
+          _can_resolve(false),
+          _tailcall(false),
+          _order(resolve_jump_table),
+          _call_processed(false),
+	  _cur(b) {	      
+	      _ah = new InsnAdapter::IA_IAPI(ah);
+	  }
+
+    ~ParseWorkElem() {
+        if (_ah != NULL) delete _ah;
+    }
+
+      
 
     ParseWorkBundle *   bundle()        const { return _bundle; }
     Edge *              edge()          const { return _edge; }
@@ -136,6 +206,9 @@ class ParseWorkElem
     bool                tailcall()      const { return _tailcall; }
     bool                callproc()      const { return _call_processed; }
     void                mark_call()     { _call_processed = true; }
+
+    Block *             cur()           const { return _cur; }
+    InsnAdapter::IA_IAPI *  ah()        const { return _ah; }
 
     /* 
      * Note that compare treats the parse_work_order as `lowest is
@@ -153,12 +226,8 @@ class ParseWorkElem
                 return true;
             else if(o1 < o2)
                 return false;
-            else {
-                if(e1->bundle() == e2->bundle()) 
-                    return e1->target() > e2->target();
-                else
-                    return e1->bundle() > e2->bundle();
-            }
+            else 
+	        return e1->target() > e2->target();
         }
     };
 
@@ -170,6 +239,10 @@ class ParseWorkElem
     bool _tailcall;
     parse_work_order _order;
     bool _call_processed;
+
+    // Data for continuing parsing jump tables
+    Block * _cur;
+    InsnAdapter::IA_IAPI * _ah;
 };
 
 // ParseWorkElem container

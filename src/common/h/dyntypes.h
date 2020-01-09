@@ -32,7 +32,9 @@
 #define DYNTYPES_H
 
 #if defined(_MSC_VER)
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 #include <winsock2.h>
 #endif
@@ -54,14 +56,21 @@
 #if defined (_MSC_VER)
   //**************** Windows ********************
   #include <hash_map>
+  #include <hash_set>
   #define dyn_hash_map stdext::hash_map
-  #define dyn_hash_set std::hash_set
+  #define dyn_hash_set stdext::hash_set
   #define DECLTHROW(x)
 #elif defined(__GNUC__)
   #include <functional>
   #define DECLTHROW(x) throw(x)
+  //*****************libcxx**********************
+  #if defined(_LIBCPP_VERSION)
+      #include <unordered_set>
+      #include <unordered_map>
+      #define dyn_hash_set std::unordered_set
+      #define dyn_hash_map std::unordered_map
   //***************** GCC ***********************
-   #if defined (__GLIBCXX__) && (__GLIBCXX__ >= 20080306)
+   #elif defined (__GLIBCXX__) && (__GLIBCXX__ >= 20080306)
       //**************** GCC >= 4.3.0 ***********
       #include <tr1/unordered_set>
       #include <tr1/unordered_map>
@@ -115,8 +124,8 @@
 
 namespace Dyninst
 {
-   typedef unsigned long Address;   
-   typedef unsigned long Offset;
+   typedef uintptr_t Address;
+   typedef uintptr_t Offset;
 
 #if defined(_MSC_VER)
    typedef int PID;

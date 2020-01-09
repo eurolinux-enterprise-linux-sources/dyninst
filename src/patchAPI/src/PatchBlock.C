@@ -38,6 +38,7 @@
 #include "Point.h"
 #include <boost/shared_ptr.hpp>
 
+using namespace std;
 using namespace Dyninst;
 using namespace PatchAPI;
 using namespace InstructionAPI;
@@ -249,7 +250,8 @@ PatchBlock::containsDynamicCall() {
              } else { // check for register indirect
                  set<InstructionAST::Ptr> regs;
                  Expression::Ptr tExpr = insn->getControlFlowTarget();
-                 tExpr->getUses(regs);
+                 if (tExpr)
+                     tExpr->getUses(regs);
                  for (set<InstructionAST::Ptr>::iterator rit = regs.begin(); 
                       rit != regs.end(); rit++)
                  {

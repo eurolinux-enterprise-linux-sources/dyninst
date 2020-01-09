@@ -36,6 +36,7 @@
 #include <map>
 #include <vector>
 #include "util.h"
+#include "dyn_regs.h"
 
 namespace Dyninst {
 
@@ -88,6 +89,7 @@ class DYNELF_EXPORT Elf_X {
     unsigned short e_shnum() const;
     unsigned short e_shstrndx() const;
     const char *e_rawfile(size_t &nbytes) const;
+    unsigned short e_endian() const;
 
     Elf_X *e_next(Elf_X *ref);
     Elf_X *e_rand(unsigned offset);
@@ -107,7 +109,7 @@ class DYNELF_EXPORT Elf_X {
     void e_shentsize(unsigned short input);
     void e_shnum(unsigned short input);
     void e_shstrndx(unsigned short input);
-
+    void e_endian(unsigned short input);
     // Data Interface
     bool isValid() const;
     int wordSize() const;
@@ -115,6 +117,8 @@ class DYNELF_EXPORT Elf_X {
     Elf_X_Shdr &get_shdr(unsigned int i);
 
     bool findDebugFile(std::string origfilename, std::string &output_name, char* &output_buffer, unsigned long &output_buffer_size);
+
+    Dyninst::Architecture getArch() const;
 
   protected:
     Elf *elf;
@@ -125,6 +129,7 @@ class DYNELF_EXPORT Elf_X {
     int filedes;
     bool is64;
     bool isArchive;
+    bool isBigEndian;
     std::vector<Elf_X_Shdr> shdrs;
     std::vector<Elf_X_Phdr> phdrs;
     unsigned int ref_count;
@@ -257,6 +262,8 @@ class DYNELF_EXPORT Elf_X_Data {
     size_t d_size() const;
     off_t d_off() const;
     size_t d_align() const;
+    void xlatetom(unsigned int encode);
+    void xlatetof(unsigned int encode);
 
     // Write Interface
     void d_buf(void *input);

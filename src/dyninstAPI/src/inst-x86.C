@@ -155,7 +155,14 @@ void registerSpace::initialize32() {
     // FPRs...
 
     // SPRs...
-    
+    registerSlot *gs = new registerSlot(REGNUM_GS,
+            "gs",
+            false,
+            registerSlot::liveAlways,
+            registerSlot::SPR);
+
+    registers.push_back(gs);
+
     // "Virtual" registers
     for (unsigned i = 1; i <= NUM_VIRTUAL_REGISTERS; i++) {
 		char buf[128];
@@ -496,6 +503,11 @@ void registerSpace::initialize64() {
                         registerSlot::liveAlways,
                         registerSlot::FPR));
 
+    registers.push_back(new registerSlot(REGNUM_FS,
+                        "FS",
+                        false,
+                        registerSlot::liveAlways,
+                        registerSlot::SPR));
 
 
 
@@ -535,16 +547,22 @@ void registerSpace::initialize()
    are saved. */
 #if defined(os_windows)
 int cpuidCall() {
+#ifdef _WIN64
+    int result[4];
+    __cpuid(result, 1);
+    return result[4]; // edx
+#else
     DWORD result = 0;
-// Note: mov <target> <source>, so backwards from what gnu uses
-	_asm {
-		push ebx
-		mov eax, 1
-		cpuid
-		pop ebx
-		mov result, edx
+    // Note: mov <target> <source>, so backwards from what gnu uses
+    _asm {
+        push ebx
+        mov eax, 1
+        cpuid
+        pop ebx
+        mov result, edx
     }
     return result;
+#endif
 }
 #endif
 
@@ -851,6 +869,18 @@ void emitOpRegImm(int opcode, RealRegister dest, int imm,
    insn+= sizeof(int);
    SET_PTR(insn, gen);
 }
+
+void emitOpSegRMReg(unsigned opcode, RealRegister dest, RealRegister, int disp, codeGen &gen)
+{
+    GET_PTR(insn, gen);
+    *insn++ = opcode;
+    *insn++ = makeModRMbyte(0, dest.reg(), 4);
+    *insn++ = 0x25;
+    *((int*)insn) = disp;
+    insn += sizeof(int);
+    SET_PTR(insn, gen);
+}
+
 
 // emit OP reg, r/m
 void emitOpRegRM(unsigned opcode, RealRegister dest, RealRegister base,
@@ -1232,15 +1262,6 @@ unsigned char jccOpcodeFromRelOp(unsigned op)
      default: assert(0);
    }
    return 0x0;
-}
-
-static inline void emitEnter(short imm16, codeGen &gen) {
-    GET_PTR(insn, gen);
-   *insn++ = 0xC8;
-   *((short*)insn) = imm16;
-   insn += sizeof(short);
-   *insn++ = 0;
-    SET_PTR(insn, gen);
 }
 
 Register emitFuncCall(opCode, codeGen &, pdvector<AstNodePtr> &, bool, Address) {
@@ -1671,10 +1692,10 @@ void EmitterIA32::emitASload(int ra, int rb, int sc, long imm, Register dest, in
       stackItemLocation loc = getHeightOf(stackItem::stacktop, gen);
       if (!gen.bt() || gen.bt()->alignedStack) {
           emitMovRMToReg(dest_r, loc.reg, loc.offset, gen);
-          if (imm) emitLEA(dest_r, RealRegister(Null_Register), 0, imm, dest_r, gen);
+          if (imm) ::emitLEA(dest_r, RealRegister(Null_Register), 0, imm, dest_r, gen);
       }
       else
-          emitLEA(loc.reg, RealRegister(Null_Register), 0,
+          ::emitLEA(loc.reg, RealRegister(Null_Register), 0,
                   loc.offset, dest_r, gen);
       return;
    }
@@ -1744,7 +1765,7 @@ void EmitterIA32::emitASload(int ra, int rb, int sc, long imm, Register dest, in
    else {
      dest_r = RealRegister(dest);
    }
-   emitLEA(src1_r, src2_r, sc, (long) imm, dest_r, gen);   
+   ::emitLEA(src1_r, src2_r, sc, (long) imm, dest_r, gen);
 
    if (src1 != REG_NULL) {
        gen.rs()->unKeepRegister(src1);

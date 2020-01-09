@@ -19,26 +19,15 @@ set (SRC_LIST
         src/PatchCallback.C 
         src/ParseCallback.C 
         src/PatchModifier.C 
+	src/PatchLoop.C
+	src/PatchLoopTreeNode.C
   )
 
 SET_SOURCE_FILES_PROPERTIES(${SRC_LIST} PROPERTIES LANGUAGE CXX)
 
 ADD_DEFINITIONS(-DPATCHAPI_LIB)
 
-
-add_library (patchAPI ${SRC_LIST})
-add_library (patchAPI_static STATIC ${SRC_LIST})
-target_link_private_libraries(patchAPI common)
-target_link_private_libraries(patchAPI instructionAPI)
-target_link_private_libraries(patchAPI parseAPI)
-
-FILE (GLOB headers "h/*.h")
-set_target_properties (patchAPI patchAPI_static PROPERTIES PUBLIC_HEADER "${headers}")
-
-
-INSTALL (TARGETS patchAPI patchAPI_static
-        EXPORT DyninstTargets
-        RUNTIME DESTINATION ${INSTALL_LIB_DIR}
-        LIBRARY DESTINATION ${INSTALL_LIB_DIR}
-        ARCHIVE DESTINATION ${INSTALL_LIB_DIR}
-        PUBLIC_HEADER DESTINATION ${INSTALL_INCLUDE_DIR})
+dyninst_library(patchAPI common instructionAPI parseAPI)
+if (USE_COTIRE)
+    cotire(patchAPI)
+endif()

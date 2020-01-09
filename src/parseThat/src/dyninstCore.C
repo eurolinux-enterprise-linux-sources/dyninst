@@ -250,7 +250,7 @@ bool instrumentMemoryReads(dynHandle *, BPatch_function *);
 bool instrumentMemoryWrites(dynHandle *, BPatch_function *);
 
 // Helpful global variables for instrumentation tracing.
-static int trace_msglen;
+static int trace_msglen = sizeof(void *) * 2;
 static BPatch_variableExpr *trace_fd = NULL;
 static BPatch_function *trace_write = NULL;
 static map< void *, BPatch_function * > trace_points;
@@ -659,7 +659,7 @@ void printSummary(BPatch_thread *proc, BPatch_exitType exit_type)
    return;
 }
 
-void reportNewProcess(BPatch_thread *parent, BPatch_thread *child)
+void reportNewProcess(BPatch_thread* /*parent*/, BPatch_thread *child)
 {
     sendMsg(config.outfd, ID_POST_FORK, INFO, ID_INFO, child->getProcess()->getPid());
 }
@@ -776,7 +776,6 @@ bool initTraceInMutatee(dynHandle *dh)
    //
    // Initialize global variables
    //
-   trace_msglen = sizeof(void *) * 2;
    trace_fd = allocateIntegerInMutatee(dh, -1);
    funcs.clear();
    sendMsg(config.outfd, ID_TRACE_FIND_WRITE, VERB2);

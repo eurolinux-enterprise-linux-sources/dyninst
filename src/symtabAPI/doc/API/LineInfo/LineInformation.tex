@@ -20,7 +20,7 @@ bool getSourceLines(Offset addressInRange,
 \end{apient}
 \apidesc{
 These methods returns the source file names and line numbers corresponding to the given address \code{addressInRange}. Searches within this line map. 
-Return \code{true} if at least one tuple corresponding to the offset was found and returns \code{false} if none found.
+Return \code{true} if at least one tuple corresponding to the offset was found and returns \code{false} if none found. Note that the order of arguments is reversed from the corresponding interfaces in \code{Module} and \code{Symtab}.
 }
 
 \begin{apient}
@@ -50,7 +50,7 @@ LineInformation::const_iterator begin() const
 \end{apient}
 \apidesc{
 This method returns an iterator pointing to the beginning of the line information for the module.
-This is useful for iterating over the entire line information present in a module. An example described in Section \ref{subsubsec:typeInfo} gives more information on how to use \code{begin()} for iterating over the line information.
+This is useful for iterating over the entire line information present in a module. An example described in Section \ref{subsec:LineNoIterating} gives more information on how to use \code{begin()} for iterating over the line information.
 }
 
 \begin{apient}
@@ -58,5 +58,5 @@ LineInformation::const_iterator end() const
 \end{apient}
 \apidesc{
 This method returns an iterator pointing to the end of the line information for the module.
-This is useful for iterating over the entire line information present in a module. An example described in Section \ref{subsubsec:typeInfo} gives more information on how to use \code{end()} for iterating over the line information.
+This is useful for iterating over the entire line information present in a module. An example described in Section \ref{subsec:LineNoIterating} gives more information on how to use \code{end()} for iterating over the line information.
 }

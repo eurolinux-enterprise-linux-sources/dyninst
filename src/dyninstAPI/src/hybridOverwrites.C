@@ -732,9 +732,9 @@ BPatch_basicBlockLoop* HybridAnalysisOW::getWriteLoop
     BPatch_basicBlockLoop *writeLoop = NULL;
     while (lIter != loops.end()) {
 
-        mal_printf("found nat'l loop w/ block[0] at 0x%x, back edge at 0%x\n",
-                   (*lIter)->getLoopHead()->getStartAddress(),
-                   (*lIter)->getBackEdge()->getSource()->getLastInsnAddress());
+//        mal_printf("found nat'l loop w/ block[0] at 0x%x, back edge at 0%x\n",
+//                   (*lIter)->getLoopHead()->getStartAddress(),
+//                   (*lIter)->getBackEdge()->getSource()->getLastInsnAddress());
 
         if ((*lIter)->containsAddressInclusive(writeAddr) && 
             (!writeLoop || writeLoop->hasAncestor(*lIter))) 
@@ -784,9 +784,9 @@ BPatch_basicBlockLoop* HybridAnalysisOW::getWriteLoop
         lIter++;
     }
     if (writeLoop) {
-        mal_printf("CHOSE nat'l loop with: block[0] at 0x%x, back edge at 0%x\n",
-		    writeLoop->getLoopHead()->getStartAddress(),
-		    writeLoop->getBackEdge()->getSource()->getLastInsnAddress());
+//        mal_printf("CHOSE nat'l loop with: block[0] at 0x%x, back edge at 0%x\n",
+//		    writeLoop->getLoopHead()->getStartAddress(),
+//		    writeLoop->getBackEdge()->getSource()->getLastInsnAddress());
     }
     return writeLoop;
 }
@@ -1343,7 +1343,7 @@ bool HybridAnalysisOW::isRealStore(Address insnAddr, block_instance *block,
     Address image_addr = func->lowlevel_func()->addrToOffset(insnAddr);
 
     std::vector<Assignment::Ptr> assignments;
-    AssignmentConverter aConverter(false);
+    AssignmentConverter aConverter(false, false);
     aConverter.convert(insn, image_addr, imgfunc, block->llb(), assignments);
 
     for (std::vector<Assignment::Ptr>::const_iterator a_iter = assignments.begin();

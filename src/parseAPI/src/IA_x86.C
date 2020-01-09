@@ -30,7 +30,6 @@
 
 
 #include "IA_IAPI.h"
-
 #include "Register.h"
 #include "Dereference.h"
 #include "Immediate.h"
@@ -130,7 +129,9 @@ bool isNopInsn(Instruction::Ptr insn)
         }
         // Check for zero displacement
         nopVisitor visitor;
-        insn->getOperand(0).getValue()->apply(&visitor);
+
+	// We need to get the src operand
+        insn->getOperand(1).getValue()->apply(&visitor);
         if (visitor.isNop) return true; 
     }
     return false;
@@ -141,7 +142,7 @@ bool IA_IAPI::isNop() const
     Instruction::Ptr ci = curInsn();
 
     assert(ci);
-    
+   
     return isNopInsn(ci);
 
 }
@@ -213,17 +214,17 @@ bool IA_IAPI::isThunk() const {
     return false;
 }
 
-bool IA_IAPI::isTailCall(Function * context, EdgeTypeEnum type, unsigned int) const
+bool IA_IAPI::isTailCall(Function * context, EdgeTypeEnum type, unsigned int, const set<Address>& knownTargets) const
 {
    // Collapse down to "branch" or "fallthrough"
     switch(type) {
-       case CALL:
        case COND_TAKEN:
        case DIRECT:
        case INDIRECT:
-       case RET:
           type = DIRECT;
           break;
+       case CALL:
+       case RET:
        case COND_NOT_TAKEN:
        case FALLTHROUGH:
        case CALL_FT:
@@ -243,27 +244,76 @@ bool IA_IAPI::isTailCall(Function * context, EdgeTypeEnum type, unsigned int) co
     }
     
     bool valid; Address addr;
-    if (type == DIRECT)
-       boost::tie(valid, addr) = getCFT();
-    else 
-       boost::tie(valid, addr) = getFallthrough();
+    boost::tie(valid, addr) = getCFT();
 
-    Function* entry = _obj->findFuncByEntry(_cr, addr);
+    Function* callee = _obj->findFuncByEntry(_cr, addr);
+    Block* target = _obj->findBlockByEntry(_cr, addr);
+
+    // check if addr is in a block if it is not entry.
+    if (target == NULL) {
+        std::set<Block*> blocks;
+        _obj->findCurrentBlocks(_cr, addr, blocks);
+        if (blocks.size() == 1) {
+            target = *blocks.begin();
+        } else if (blocks.size() == 0) {
+	    // This case can happen when the jump target is a function entry,
+	    // but we have not parsed the function yet,
+	    // or when this is an indirect jump 
+	    target = NULL;
+	} else {
+	    // If this case happens, it means the jump goes into overlapping instruction streams,
+	    // it is not likely to be a tail call.
+	    parsing_printf("\tjumps into overlapping instruction streams\n");
+	    for (auto bit = blocks.begin(); bit != blocks.end(); ++bit) {
+	        parsing_printf("\t block [%lx,%lx)\n", (*bit)->start(), (*bit)->end());
+	    }
+	    parsing_printf("\tjump to 0x%lx, NOT TAIL CALL\n", addr);
+	    tailCalls[type] = false;
+	    return false;
+	}
+    }
+
     if(curInsn()->getCategory() == c_BranchInsn &&
        valid &&
-       entry && 
-       entry != context && !context->contains(entry->entry()))
+       callee && 
+       callee != context &&
+       target &&
+       !context->contains(target)
+       )
     {
       parsing_printf("\tjump to 0x%lx, TAIL CALL\n", addr);
       tailCalls[type] = true;
       return true;
     }
 
+    if (curInsn()->getCategory() == c_BranchInsn &&
+            valid &&
+            !callee) {
+	if (target) {
+	    parsing_printf("\tjump to 0x%lx is known block, but not func entry, NOT TAIL CALL\n", addr);
+	    tailCalls[type] = false;
+	    return false;
+	} else if (knownTargets.find(addr) != knownTargets.end()) {
+	    parsing_printf("\tjump to 0x%lx is known target in this function, NOT TAIL CALL\n", addr);
+	    tailCalls[type] = false;
+	    return false;
+	}
+    }
+
     if(allInsns.size() < 2) {
+      if(context->addr() == _curBlk->start() && curInsn()->getCategory() == c_BranchInsn)
+      {
+	parsing_printf("\tjump as only insn in entry block, TAIL CALL\n");
+	tailCalls[type] = true;
+	return true;
+      }
+      else
+      {
         parsing_printf("\ttoo few insns to detect tail call\n");
         context->obj()->cs()->incrementCounter(PARSE_TAILCALL_FAIL);
         tailCalls[type] = false;
         return false;
+      }
     }
 
     if ((curInsn()->getCategory() == c_BranchInsn))
@@ -281,8 +331,7 @@ bool IA_IAPI::isTailCall(Function * context, EdgeTypeEnum type, unsigned int) co
            --prevIter;
            prevInsn = prevIter->second;
         }
-
-
+	prevInsn = prevIter->second;
         if(prevInsn->getOperation().getID() == e_leave)
         {
            parsing_printf("\tprev insn was leave, TAIL CALL\n");
@@ -299,14 +348,27 @@ bool IA_IAPI::isTailCall(Function * context, EdgeTypeEnum type, unsigned int) co
             }
         }
         else if(prevInsn->getOperation().getID() == e_add)
-        {
+        {			
             if(prevInsn->isWritten(stackPtr[_isrc->getArch()]))
             {
-                parsing_printf("\tprev insn was %s, TAIL CALL\n", prevInsn->format().c_str());
-                tailCalls[type] = true;
-                return true;
-            }
-            parsing_printf("\tprev insn was %s, not tail call\n", prevInsn->format().c_str());
+				bool call_fallthrough = false;
+				if (_curBlk->start() == prevIter->first) {				
+					for (auto eit = _curBlk->sources().begin(); eit != _curBlk->sources().end(); ++eit) {						
+						if ((*eit)->type() == CALL_FT) {
+							call_fallthrough = true;
+							break;
+						}
+					}
+				}
+				if (call_fallthrough) {
+					parsing_printf("\tprev insn was %s, but it is the next instruction of a function call, not a tail call %x %x\n", prevInsn->format().c_str()); 
+				}	else {
+					parsing_printf("\tprev insn was %s, TAIL CALL\n", prevInsn->format().c_str());
+					tailCalls[type] = true;
+					return true;
+				}
+			} else
+				parsing_printf("\tprev insn was %s, not tail call\n", prevInsn->format().c_str());
         }
     }
 

@@ -43,9 +43,11 @@ using namespace NS_power;
    || defined(arch_x86_64)
 #include "codegen-x86.h"
 using namespace NS_x86;
+#elif defined(arch_aarch64)
+#include "codegen-aarch64.h"
+using namespace NS_aarch64;
 #else
 #error "unknown architecture"
-
 #endif
 
 #include "bitArray.h"
@@ -221,7 +223,12 @@ class codeGen {
     Emitter *codeEmitter() const;
     Emitter *emitter() const { return codeEmitter(); } // A little shorter
     bool inInstrumentation() const { return inInstrumentation_; }
+
+    bool insertNaked() const { return insertNaked_; }
+    void setInsertNaked(bool i) { insertNaked_ = i; }
     
+    bool modifiedStackFrame() const { return modifiedStackFrame_; }
+    void setModifiedStackFrame(bool i) { modifiedStackFrame_ = i; }
 
     Dyninst::Architecture getArch() const;
 
@@ -274,6 +281,8 @@ class codeGen {
 
     bool inInstrumentation_;
 
+    bool insertNaked_;
+    bool modifiedStackFrame_;
 
     std::vector<relocPatch> patches_;
     std::vector<pcRelRegion *> pcrels_;

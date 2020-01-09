@@ -32,18 +32,22 @@
 //#include "../rose/powerpcInstructionSemantics.h"
 
 #include "Instruction.h"
-#include "Operand.h"
-#include "Expression.h"
 #include "Dereference.h"
 #include "Immediate.h"
-#include <vector>
 
 #include "../rose/SgAsmInstruction.h"
 #include "../rose/SgAsmPowerpcInstruction.h"
+#include "../rose/SgAsmArmv8Instruction.h"
 #include "../rose/SgAsmx86Instruction.h"
 #include "../rose/SgAsmExpression.h"
 
 #include "ExpressionConversionVisitor.h"
+
+// Assume Windows/MSVC is little-endian
+
+#if defined(_MSC_VER)
+#define htobe _byteswap_ulong
+#endif
 
 using namespace Dyninst;
 using namespace InstructionAPI;
@@ -69,35 +73,35 @@ SgAsmInstruction *RoseInsnFactory::convert(const InstructionAPI::Instruction::Pt
   // operand list
   SgAsmOperandList *roperands = new SgAsmOperandList;
   
-  // std::cerr << "Converting " << insn->format(addr) << " @" << std::hex << addr << std::dec << std::endl;
+//   std::cerr << "Converting " << insn->format(addr) << " @" << std::hex << addr << std::dec << std::endl;
   
-  // std::cerr << "checking instruction: " << insn->format(addr) << " for special handling" << std::endl;
+//   std::cerr << "checking instruction: " << insn->format(addr) << " for special handling" << std::endl;
   if (handleSpecialCases(insn->getOperation().getID(), rinsn, roperands)) {
       rinsn->set_operandList(roperands);
       return rinsn;
   }
 
-  // std::cerr << "no special handling by opcode, checking if we should mangle operands..." << std::endl;
+//   std::cerr << "no special handling by opcode, checking if we should mangle operands..." << std::endl;
   std::vector<InstructionAPI::Operand> operands;
   insn->getOperands(operands);
-  std::cerr << "\t " << operands.size() << " operands" << std::endl;
+//   std::cerr << "\t " << operands.size() << " operands" << std::endl;
   massageOperands(insn, operands);
   int i = 0;
-  std::cerr << "converting insn " << insn->format(addr) << std::endl;
+//   std::cerr << "converting insn " << insn->format(addr) << std::endl;
   for (std::vector<InstructionAPI::Operand>::iterator opi = operands.begin();
        opi != operands.end();
        ++opi, ++i) {
       InstructionAPI::Operand &currOperand = *opi;
-      std::cerr << "Converting operand " << currOperand.format(Arch_x86, addr) << std::endl;
-      roperands->append_operand(convertOperand(currOperand.getValue(), addr));
+//       std::cerr << "Converting operand " << currOperand.format(arch(), addr) << std::endl;
+      roperands->append_operand(convertOperand(currOperand.getValue(), addr, insn->size()));
   }  
   rinsn->set_operandList(roperands);
   return rinsn;
 }
 
-SgAsmExpression *RoseInsnFactory::convertOperand(const Expression::Ptr expression, uint64_t addr) {
+SgAsmExpression *RoseInsnFactory::convertOperand(const Expression::Ptr expression, int64_t addr, size_t insnSize) {
   if(!expression) return NULL;
-  ExpressionConversionVisitor visitor(arch(), addr);
+  ExpressionConversionVisitor visitor(arch(), addr, insnSize);
   expression->apply(&visitor);
   return visitor.getRoseExpression();
 }
@@ -117,10 +121,14 @@ void RoseInsnX86Factory::setOpcode(SgAsmInstruction *insn, entryID opcode, prefi
 }
 
 void RoseInsnX86Factory::setSizes(SgAsmInstruction *insn) {
-  // FIXME when we go 64-bit...
   SgAsmx86Instruction *tmp = static_cast<SgAsmx86Instruction *>(insn);
-  tmp->set_operandSize(x86_insnsize_32);
-  tmp->set_addressSize(x86_insnsize_32);
+  if (a == Arch_x86_64) {
+      tmp->set_operandSize(x86_insnsize_64);
+      tmp->set_addressSize(x86_insnsize_64);
+  } else {
+      tmp->set_operandSize(x86_insnsize_32);
+      tmp->set_addressSize(x86_insnsize_32);
+  }
 }
 
 bool RoseInsnX86Factory::handleSpecialCases(entryID, SgAsmInstruction *, SgAsmOperandList *) {
@@ -204,6 +212,33 @@ void RoseInsnX86Factory::massageOperands(const InstructionAPI::Instruction::Ptr 
 	  }
 	  operands.resize(1);
 	  break;
+  case e_aaa:
+  case e_aas: 
+	  // ROSE does not expect implicit operand rax/eax to be treated as an operand
+	  operands.clear();
+	  break;
+  case e_aad:
+  case e_aam: {
+	  // ROSE does not expect implicit operand rax/eax to be treated as an operand
+	  std::set<RegisterAST::Ptr> regs;
+	  operands[0].getReadSet(regs);
+	  operands[0].getWriteSet(regs);	 	  
+	  if (!regs.empty()) {	      
+		      operands[0] = operands[1];
+	  }
+	  operands.resize(1);
+	  break;
+  }
+  case e_div:
+  case e_idiv:
+  case e_imul:
+  case e_mul:
+    // remove implicit operands.
+    if (operands.size() == 3) {
+      operands[0] = operands[2];
+      operands.resize(1);
+    }
+    break;
   default:
     break;
   }
@@ -227,10 +262,9 @@ void RoseInsnPPCFactory::setOpcode(SgAsmInstruction *insn, entryID opcode, prefi
 void RoseInsnPPCFactory::setSizes(SgAsmInstruction *) {
 }
 
-
-bool RoseInsnPPCFactory::handleSpecialCases(entryID iapi_opcode, 
-					    SgAsmInstruction *insn, 
-					    SgAsmOperandList *rose_operands) {
+bool RoseInsnPPCFactory::handleSpecialCases(entryID iapi_opcode,
+                                            SgAsmInstruction *insn,
+                                            SgAsmOperandList *rose_operands) {
   SgAsmPowerpcInstruction *rose_insn = static_cast<SgAsmPowerpcInstruction *>(insn);
 
   switch(iapi_opcode) {
@@ -246,6 +280,12 @@ bool RoseInsnPPCFactory::handleSpecialCases(entryID iapi_opcode,
       raw = raw << 8;
       raw |= bytes[i];
     }
+#ifdef os_windows
+    // Visual Studio doensn't define htobe32, so we assume that Windows is always little endian.
+    raw = _byteswap_ulong(raw);
+#else
+    raw = htobe32(raw);
+#endif
     bool isAbsolute = (bool)(raw & 0x00000002);
     bool isLink = (bool)(raw & 0x00000001);
     rose_insn->set_kind(makeRoseBranchOpcode(iapi_opcode, isAbsolute, isLink));
@@ -335,3 +375,24 @@ void RoseInsnPPCFactory::massageOperands(const InstructionAPI::Instruction::Ptr 
   return;
 }
 
+void RoseInsnArmv8Factory::setSizes(SgAsmInstruction */*insn*/) {
+
+}
+
+SgAsmInstruction *RoseInsnArmv8Factory::createInsn() {
+  return new SgAsmArmv8Instruction;
+}
+
+void RoseInsnArmv8Factory::setOpcode(SgAsmInstruction *insn, entryID opcode, prefixEntryID, std::string) {
+  SgAsmArmv8Instruction *tmp = static_cast<SgAsmArmv8Instruction *>(insn);
+  tmp->set_kind(convertKind(opcode));
+}
+
+bool RoseInsnArmv8Factory::handleSpecialCases(entryID, SgAsmInstruction *, SgAsmOperandList *) {
+  return false;
+}
+
+void RoseInsnArmv8Factory::massageOperands(const InstructionAPI::Instruction::Ptr &,
+                                           std::vector <InstructionAPI::Operand> &) {
+  return;
+}

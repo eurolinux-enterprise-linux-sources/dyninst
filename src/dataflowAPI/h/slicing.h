@@ -37,7 +37,9 @@
 #include "dyntypes.h"
 #include <queue>
 #include <set>
+#include <unordered_set>
 #include <map>
+#include <unordered_map>
 #include <list>
 #include <stack>
 
@@ -47,6 +49,7 @@
 
 #include "AbslocInterface.h"
 
+#include <boost/functional/hash.hpp>
 
 namespace Dyninst {
 
@@ -68,30 +71,32 @@ typedef boost::shared_ptr<Graph> GraphPtr;
  }
  typedef boost::shared_ptr<InstructionAPI::Instruction> InstructionPtr;
 
+ class Slicer;
+
 // Used in temp slicer; should probably
 // replace OperationNodes when we fix up
 // the DDG code.
-class SliceNode : public Node {
+class DATAFLOW_EXPORT SliceNode : public Node {
  public:
   typedef boost::shared_ptr<SliceNode> Ptr;
       
-  DATAFLOW_EXPORT static SliceNode::Ptr create(AssignmentPtr ptr,
+  static SliceNode::Ptr create(AssignmentPtr ptr,
 				ParseAPI::Block *block,
 				ParseAPI::Function *func) {
     return Ptr(new SliceNode(ptr, block, func));
   }
       
-  DATAFLOW_EXPORT ParseAPI::Block *block() const { return b_; };
-  DATAFLOW_EXPORT ParseAPI::Function *func() const { return f_; };
-  DATAFLOW_EXPORT Address addr() const;
-  DATAFLOW_EXPORT AssignmentPtr assign() const { return a_; }
+  ParseAPI::Block *block() const { return b_; };
+  ParseAPI::Function *func() const { return f_; };
+  Address addr() const;
+  AssignmentPtr assign() const { return a_; }
       
-  DATAFLOW_EXPORT Node::Ptr copy() { return Node::Ptr(); }
-  DATAFLOW_EXPORT bool isVirtual() const { return false; }
+  Node::Ptr copy() { return Node::Ptr(); }
+  bool isVirtual() const { return false; }
       
-  DATAFLOW_EXPORT std::string format() const;
+  std::string format() const;
       
-  DATAFLOW_EXPORT virtual ~SliceNode() {};
+  virtual ~SliceNode() {};
       
  private:
       
@@ -103,6 +108,8 @@ class SliceNode : public Node {
   AssignmentPtr a_;
   ParseAPI::Block *b_;
   ParseAPI::Function *f_;
+
+  friend class Slicer;
 };
 
 class SliceEdge : public Edge {
@@ -132,14 +139,22 @@ class Slicer {
 
   DATAFLOW_EXPORT Slicer(AssignmentPtr a,
 	 ParseAPI::Block *block,
-	 ParseAPI::Function *func);
+	 ParseAPI::Function *func,
+	 bool cache = true,
+	 bool stackAnalysis = true);
     
   DATAFLOW_EXPORT static bool isWidenNode(Node::Ptr n);
 
   class Predicates {
+    bool clearCache, controlFlowDep;
+
   public:
     typedef std::pair<ParseAPI::Function *, int> StackDepth_t;
     typedef std::stack<StackDepth_t> CallStack_t;
+    DATAFLOW_EXPORT bool performCacheClear() { if (clearCache) {clearCache = false; return true;} else return false; }
+    DATAFLOW_EXPORT void setClearCache(bool b) { clearCache = b; }
+    DATAFLOW_EXPORT bool searchForControlFlowDep() { return controlFlowDep; }
+    DATAFLOW_EXPORT void setSearchForControlFlowDep(bool cfd) { controlFlowDep = cfd; }
 
     DATAFLOW_EXPORT virtual bool allowImprecision() { return false; }
     DATAFLOW_EXPORT virtual bool widenAtPoint(AssignmentPtr) { return false; }
@@ -164,6 +179,13 @@ class Slicer {
        return false; 
     }
     DATAFLOW_EXPORT virtual ~Predicates() {};
+
+    // Callback function when adding a new node to the slice.
+    // Return true if we want to continue slicing
+    DATAFLOW_EXPORT virtual bool addNodeCallback(AssignmentPtr,
+                                                 std::set<ParseAPI::Edge*> &) { return true;}
+    DATAFLOW_EXPORT Predicates() : clearCache(false), controlFlowDep(false) {}						
+
   };
 
   DATAFLOW_EXPORT GraphPtr forwardSlice(Predicates &predicates);
@@ -267,12 +289,21 @@ class Slicer {
         ptr(p)
     { }
 
+    // basic comparator for ordering
+    bool operator<(const Element& el) const { 
+        if (ptr->addr() < el.ptr->addr()) { return true; }
+        if (el.ptr->addr() < ptr->addr()) { return false; }
+        if (ptr->out() < el.ptr->out()) { return true; }
+        return false;
+    }
+
     ParseAPI::Block * block;
     ParseAPI::Function * func;
 
     AbsRegion reg;
     Assignment::Ptr ptr;
   };
+  bool ReachableFromBothBranches(ParseAPI::Edge *e, std::vector<Element> &newE);
 
   // State for recursive slicing is a context, location pair
   // and a list of AbsRegions that are being searched for.
@@ -333,7 +364,12 @@ class Slicer {
       Def(Element const& e, AbsRegion const& r) : ele(e), data(r) { } 
       Element ele;
       AbsRegion data;
-  
+ 
+      struct DefHasher {
+          size_t operator() (const Def &o) const {
+	      return Assignment::AssignmentPtrHasher()(o.ele.ptr);
+	  }
+      };
       // only the Assignment::Ptr of an Element matters
       // for comparison
       bool operator<(Def const& o) const {
@@ -346,8 +382,13 @@ class Slicer {
           else 
               return false;
       }
+
+      bool operator==(Def const &o) const {
+          if (ele.ptr != o.ele.ptr) return false;
+	  return data == o.data;
+      }
     };
- 
+
     /*
      * A cache from AbsRegions -> Defs.
      *
@@ -403,6 +444,11 @@ class Slicer {
             else
                 return false;
         }
+	bool operator == (EdgeTuple const &o) const {
+	    if (s != o.s) return false;
+	    if (d != o.d) return false;
+	    return r == o.r;
+	}
         SliceNode::Ptr s;
         SliceNode::Ptr d;
         AbsRegion r;
@@ -434,7 +480,8 @@ class Slicer {
             SliceFrame &cand,
             bool skip,
             std::map<CacheEdge, std::set<AbsRegion> > & visited,
-            std::map<Address,DefCache> & cache);
+            std::map<Address,DefCache> & single,
+            std::map<Address, DefCache>& cache);
 
     bool updateAndLink(
             GraphPtr g,
@@ -453,6 +500,12 @@ class Slicer {
             SliceFrame & f,
             std::set<AbsRegion> const& block);
 
+    bool stopSlicing(SliceFrame::ActiveMap& active, 
+                     GraphPtr g,
+                     Address addr,
+                     Direction dir);
+
+
     void markVisited(
             std::map<CacheEdge, std::set<AbsRegion> > & visited,
             CacheEdge const& e,
@@ -463,7 +516,7 @@ class Slicer {
             Assignment::Ptr assn,
             DefCache & cache);
 
-    void findMatch(
+    bool findMatch(
             GraphPtr g,
             Direction dir,
             SliceFrame const& cand,
@@ -579,6 +632,12 @@ class Slicer {
 		  Element const&target,
           AbsRegion const& data);
 
+  void insertPair(GraphPtr graph,
+		  Direction dir,
+		  SliceNode::Ptr& source,
+		  SliceNode::Ptr& target,
+          AbsRegion const& data);
+
   void convertInstruction(InstructionPtr,
 			  Address,
 			  ParseAPI::Function *,
@@ -607,11 +666,15 @@ class Slicer {
 
   void cleanGraph(GraphPtr g);
 
+  void promotePlausibleNodes(GraphPtr g, Direction d);
+
   ParseAPI::Block *getBlock(ParseAPI::Edge *e,
 			    Direction dir);
   
 
   void insertInitialNode(GraphPtr ret, Direction dir, SliceNode::Ptr aP);
+
+  void mergeRecursiveCaches(std::map<Address, DefCache>& sc, std::map<Address, DefCache>& c, Address a);
 
   InsnCache insnCache_;
 
@@ -619,15 +682,40 @@ class Slicer {
   ParseAPI::Block *b_;
   ParseAPI::Function *f_;
 
+
   // Assignments map to unique slice nodes
-  std::map<AssignmentPtr, SliceNode::Ptr> created_;
+  std::unordered_map<AssignmentPtr, SliceNode::Ptr, Assignment::AssignmentPtrHasher> created_;
 
   // cache to prevent edge duplication
-  std::map<EdgeTuple, int> unique_edges_;
+  struct EdgeTupleHasher {
+    size_t operator() (const EdgeTuple& et) const {
+        size_t seed = (size_t)(et.s.get());
+        boost::hash_combine( seed , (size_t)(et.d.get()));
+	return seed;
+    }
+  };
+  std::unordered_map<EdgeTuple, int, EdgeTupleHasher> unique_edges_;
+
+  // map of previous active maps. these are used to end recursion.
+  typedef std::map<AbsRegion, std::set<Element> > PrevMap;
+  std::map<Address, PrevMap> prev_maps;
+
+  // set of plausible entry/exit nodes.
+  std::set<SliceNode::Ptr> plausibleNodes;
+
+  // a stack and set of addresses that mirror our recursion.
+  // these are used to detect loops and properly merge cache.
+  std::deque<Address> addrStack;
+  std::set<Address> addrSet;
 
   AssignmentConverter converter;
 
   SliceNode::Ptr widen_;
+ public: 
+  // A set of edges that have been visited during slicing,
+  // which can be used for external users to figure out
+  // which part of code has been analyzed
+  std::set<ParseAPI::Edge*> visitedEdges;
 };
 
 }

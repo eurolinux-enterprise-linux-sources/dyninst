@@ -52,6 +52,7 @@
 
 #include <queue>
 
+using namespace std;
 using namespace Dyninst;
 
 class pdmodule;
@@ -78,6 +79,7 @@ class parse_block : public codeRange, public ParseAPI::Block  {
     bool isShared() const { return containingFuncs() > 1; }
     bool isExitBlock();
     bool isCallBlock();
+    bool isIndirectTailCallBlock();
     bool isEntryBlock(parse_func * f) const;
     parse_func *getEntryFunc() const;  // func starting with this bock
 
@@ -233,24 +235,49 @@ class parse_func : public ParseAPI::Function
    }	
 
    /*** Function naming ***/
-   const string &symTabName() const { 
+   string symTabName() const { 
        return func_->getFirstSymbol()->getMangledName();
    }
-   const string &prettyName() const {
+   string prettyName() const {
        return func_->getFirstSymbol()->getPrettyName();
    }
-   const string &typedName() const {
+   string typedName() const {
        return func_->getFirstSymbol()->getTypedName();
    }
-   const vector<string> &symTabNameVector() const {
+   SymtabAPI::Aggregate::name_iter symtab_names_begin() const 
+   {
+     return func_->mangled_names_begin();
+   }
+   SymtabAPI::Aggregate::name_iter symtab_names_end() const 
+   {
+     return func_->mangled_names_end();
+   }
+   SymtabAPI::Aggregate::name_iter pretty_names_begin() const 
+   {
+     return func_->pretty_names_begin();
+   }
+   SymtabAPI::Aggregate::name_iter pretty_names_end() const 
+   {
+     return func_->pretty_names_end();
+   }
+   SymtabAPI::Aggregate::name_iter typed_names_begin() const 
+   {
+     return func_->typed_names_begin();
+   }
+   SymtabAPI::Aggregate::name_iter typed_names_end() const 
+   {
+     return func_->typed_names_end();
+   }
+   
+   /*   vector<string> symTabNameVector() const {
        return func_->getAllMangledNames();
    }
-   const vector<string> &prettyNameVector() const {
+   vector<string> prettyNameVector() const {
        return func_->getAllPrettyNames();
    }
-   const vector<string> &typedNameVector() const {
+   vector<string> typedNameVector() const {
        return func_->getAllTypedNames();
-   }
+       }*/
    void copyNames(parse_func *duplicate);
    // return true if the name is new (and therefore added)
    bool addSymTabName(std::string name, bool isPrimary = false);

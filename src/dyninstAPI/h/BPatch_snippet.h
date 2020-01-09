@@ -241,6 +241,9 @@ class BPATCH_DLL_EXPORT BPatch_constExpr : public BPatch_snippet {
     //  Creates a representation of an (unsigned long) value
     BPatch_constExpr(unsigned long value);
 
+	//  Creates a representation of an (unsigned long long) value
+	BPatch_constExpr(unsigned long long value);
+
     //  BPatch_constExpr::BPatch_constExpr
     //  Creates a representation of a (char *) value
     BPatch_constExpr(const char *value);
@@ -366,7 +369,7 @@ class BPATCH_DLL_EXPORT BPatch_variableExpr : public BPatch_snippet
     friend class BPatch_image;
     friend class BPatch_function;
 
-    const char		*name;
+    std::string		name;
     BPatch_addressSpace     *appAddSpace;
     AddressSpace *lladdrSpace;
     void		*address;
@@ -380,7 +383,7 @@ class BPATCH_DLL_EXPORT BPatch_variableExpr : public BPatch_snippet
     AddressSpace *getAS();
     // Used to get expressions for the components of a structure
     // Used to get function pointers
-    BPatch_variableExpr(char *in_name, 
+    BPatch_variableExpr(const char *in_name, 
                         BPatch_addressSpace *in_addSpace,
                         AddressSpace *as,
                         AstNodePtr ast_wrapper_,

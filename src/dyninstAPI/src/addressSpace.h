@@ -186,7 +186,7 @@ class AddressSpace : public InstructionSource {
     virtual void addTrap(Address from, Address to, codeGen &gen) = 0;
     virtual void removeTrap(Address from) = 0;
 
-    bool getDyninstRTLibName();
+    virtual bool getDyninstRTLibName();
 
     // InstructionSource 
     virtual bool isValidAddress(const Address) const;
@@ -196,6 +196,7 @@ class AddressSpace : public InstructionSource {
     bool usesDataLoadAddress() const; // OS-specific
     virtual bool isCode(const Address) const;
     virtual bool isData(const Address) const;
+    virtual bool isReadOnly(const Address) const;
     virtual Address offset() const = 0;
     virtual Address length() const = 0;
     virtual Architecture getArch() const = 0;

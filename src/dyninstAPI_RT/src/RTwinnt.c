@@ -35,11 +35,12 @@
 #include "dyninstAPI_RT/h/dyninstAPI_RT.h"
 #include "RTcommon.h"
 #include <windows.h>
+#include <WinSock2.h>
+#include <WS2tcpip.h>
 #include <Dbghelp.h>
 #include <Psapi.h>
 #include <stdio.h>
 #include <stdlib.h>
-//#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <mmsystem.h>
 #include <errno.h>
@@ -51,7 +52,6 @@
 #include <io.h>
 #include <stdio.h>
 #include <assert.h>
-//#include <winsock2.h>
 
 extern unsigned long dyninstTrapTableUsed;
 extern unsigned long dyninstTrapTableVersion;
@@ -143,7 +143,7 @@ int DYNINSTasyncConnect(int mutatorpid)
   int sock_fd;
   struct sockaddr_in sadr;
   struct in_addr *inadr;
-  struct hostent *hostptr;
+  struct addrinfo *result = NULL;
   
   WORD wsversion = MAKEWORD(2,0);
   WSADATA wsadata;
@@ -167,8 +167,8 @@ int DYNINSTasyncConnect(int mutatorpid)
    
   RTprintf("%s[%d]:  DYNINSTasyncConnect before gethostbyname\n", __FILE__, __LINE__);
 
-  hostptr = gethostbyname("localhost");
-  inadr = (struct in_addr *) ((void*) hostptr->h_addr_list[0]);
+  getaddrinfo("localhost", NULL, NULL, &result);
+  inadr = (struct in_addr *) result->ai_addr;
 
   RTprintf("%s[%d]:  inside DYNINSTasyncConnect before memset\n", __FILE__, __LINE__);
 
@@ -215,6 +215,8 @@ int DYNINSTasyncConnect(int mutatorpid)
 
   RTprintf("%s[%d]:  leaving DYNINSTasyncConnect\n", __FILE__, __LINE__);
 
+  freeaddrinfo(result);
+
   return 1; /*true*/
 }
 
@@ -258,16 +260,21 @@ int dyn_pid_self()
 
 int dyn_lwp_self()
 {
-	/* getCurrentThreadId() is conflicting with SD-Dyninst instrumentation. 
-	So I'm doing the massively unportable thing here and hard-coding the assembly
-	FOR GREAT JUSTICE! */
-/*    return GetCurrentThreadId(); */
-	/* This will do stack frame setup, but that seems harmless in this context... */
-	__asm
+#ifdef _WIN64
+    return GetCurrentThreadId();
+#else
+    /* return GetCurrentThreadId(); */
+    /* getCurrentThreadId() is conflicting with SD-Dyninst instrumentation.
+     *  So I'm doing the massively unportable thing here and hard-coding the assembly
+     *  FOR GREAT JUSTICE!
+     */
+    /* This will do stack frame setup, but that seems harmless in this context... */
+    __asm
     {
-        mov     EAX,FS:[0x18]
-		mov     EAX,DS:[EAX+0x24]
-	}
+      mov     EAX,FS:[0x18]
+      mov     EAX,DS:[EAX+0x24]
+    }
+#endif
 }
 
 dyntid_t dyn_pthread_self()
@@ -362,7 +369,7 @@ static struct trap_mapping_header *getStaticTrapMap(unsigned long addr, unsigned
                  + curSecn.SizeOfRawData 
                  - 16);
    if (0 != strncmp("DYNINST_REWRITE", str, 15)) {
-      fprintf(stderr, "ERROR IN RTLIB: getStaticTrapMap found bad string [%s] at %lx %s[%d]\n", 
+      fprintf(stderr, "ERROR IN RTLIB: getStaticTrapMap found bad string [%s] at %p (%s[%d])\n",
               str, str, __FILE__,__LINE__);
       goto done; // doesn't have DYNINST_REWRITE label
    }
@@ -398,7 +405,7 @@ LONG dyn_trapHandler(PEXCEPTION_POINTERS e)
 
    if (EXCEPTION_BREAKPOINT != e->ExceptionRecord->ExceptionCode) {
       fprintf(stderr,"RTLIB: dyn_trapHandler exiting early, exception "
-              "type = 0x%lx triggered at 0x%lx is not breakpoint %s[%d]\n", 
+              "type = 0x%lx triggered at %p is not breakpoint %s[%d]\n",
               e->ExceptionRecord->ExceptionCode, trap_addr, __FILE__,__LINE__);
       return EXCEPTION_CONTINUE_SEARCH;
    }
@@ -418,9 +425,15 @@ LONG dyn_trapHandler(PEXCEPTION_POINTERS e)
                                   (volatile trapMapping_t **) &mapping,
                                   &one);
 
+#ifdef _WIN64
+    rtdebug_printf("RTLIB: changing Rip from trap at 0x%lx to 0x%lx\n",
+	   e->ContextRecord->Rip, (long)trap_to + loadAddr);
+   e->ContextRecord->Rip = (long)trap_to + loadAddr;
+#else
    rtdebug_printf("RTLIB: changing Eip from trap at 0x%lx to 0x%lx\n", 
            e->ContextRecord->Eip, (long)trap_to + loadAddr);
    e->ContextRecord->Eip = (long) trap_to + loadAddr;
+#endif
    return EXCEPTION_CONTINUE_EXECUTION;
 }
 
@@ -476,14 +489,14 @@ BOOL __stdcall DYNINST_FakeBlockInput(BOOL blockit)
 DWORD __stdcall DYNINST_FakeSuspendThread(HANDLE hThread)
 {
     DWORD suspendCnt = 0;
-    fprintf(stOut,"%d = DYNINST_FakeSuspendThread(%d)\n",suspendCnt,hThread);
+    fprintf(stOut,"%d = DYNINST_FakeSuspendThread(%p)\n",suspendCnt,hThread);
     return suspendCnt;
 }
 
 BOOL __stdcall DYNINST_FakeCheckRemoteDebuggerPresent(HANDLE hProcess, PBOOL bpDebuggerPresent)
 {
     BOOL ret = RT_FALSE;
-    fprintf(stOut,"%d = DYNINST_FakeCheckRemoteDebuggerPresent(%d,0x%lx)\n",
+    fprintf(stOut,"%d = DYNINST_FakeCheckRemoteDebuggerPresent(%p,%p)\n",
             ret, hProcess, bpDebuggerPresent);
     (*bpDebuggerPresent) = ret;
     return ret;

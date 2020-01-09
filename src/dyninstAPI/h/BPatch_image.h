@@ -65,6 +65,9 @@ class BPatch_image;
 class BPatch_object_getMod;
 
 namespace Dyninst {
+	namespace SymtabAPI {
+		struct AddressRange;
+	}
   namespace PatchAPI {
     class PatchMgr;
     typedef boost::shared_ptr<PatchMgr> PatchMgrPtr;
@@ -242,9 +245,16 @@ class BPATCH_DLL_EXPORT BPatch_image: public BPatch_sourceObj {
   //  method to retrieve addresses corresponding to a line in a file
 
   bool getAddressRanges( const char * fileName, unsigned int lineNo, 
-			 std::vector<std::pair<unsigned long, unsigned long> > & ranges );
+			 std::vector<Dyninst::SymtabAPI::AddressRange > & ranges );
     
   bool getSourceLines( unsigned long addr, BPatch_Vector<BPatch_statement> & lines );
+
+  typedef std::vector<std::pair<unsigned long, unsigned long> >::iterator arange_iter;
+  typedef BPatch_Vector<BPatch_statement>::iterator statement_iter;
+  arange_iter getAddressRanges_begin(const char* fileName, unsigned int lineNo);
+  arange_iter getAddressRanges_end(const char* fileName, unsigned int lineNo);
+  statement_iter getSourceLines_begin(unsigned long addr);
+  statement_iter getSourceLines_end(unsigned long addr);
 
   //  BPatch_image::getProgramName
   //  
@@ -313,6 +323,7 @@ class BPATCH_DLL_EXPORT BPatch_image: public BPatch_sourceObj {
   BPatch_module *findOrCreateModule(mapped_module *base);
   BPatch_object *findOrCreateObject(mapped_object *base);
   void removeModule(BPatch_module *mod);
+  void removeObject(BPatch_object *obj);
   void removeAllModules();
 
 #if defined(_MSC_VER)

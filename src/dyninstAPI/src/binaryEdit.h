@@ -174,9 +174,6 @@ class BinaryEdit : public AddressSpace {
 
    mapped_object *getMappedObject();
    
-   int_variable* createTrampGuard();
-   void setTrampGuard(int_variable* tg); 
-
    void setMultiThreadCapable(bool b);
 
    void addSibling(BinaryEdit *);
@@ -194,6 +191,7 @@ class BinaryEdit : public AddressSpace {
 
    virtual void addTrap(Address from, Address to, codeGen &gen);
    virtual void removeTrap(Address /*from*/) {};
+    static bool getResolvedLibraryPath(const std::string &filename, std::vector<std::string> &paths);
 
  private:
     Address highWaterMark_;
@@ -203,7 +201,6 @@ class BinaryEdit : public AddressSpace {
     static bool getStatFileDescriptor(const std::string &file,
                                       fileDescriptor &desc);
 
-    static bool getResolvedLibraryPath(const std::string &filename, std::vector<std::string> &paths);
 
     bool inferiorMallocStatic(unsigned size);
 

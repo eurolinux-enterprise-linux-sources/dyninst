@@ -38,118 +38,14 @@
 #include <string>
 #include "annotations.h"
 
+#include "common/src/headers.h"
+
 #include <iostream>
 
 
 using namespace Dyninst;
 using namespace SymtabAPI;
 
-#if !defined(SERIALIZATION_DISABLED)
-bool addSymID(SerializerBase *sb, Symbol *sym, Address id)
-{
-	assert(id);
-	assert(sym);
-	assert(sb);
-
-	SerContextBase *scb = sb->getContext();
-	if (!scb)
-	{
-		fprintf(stderr, "%s[%d]:  SERIOUS:  FIXME\n", FILE__, __LINE__);
-		return false;
-	}
-
-	SerContext<Symtab> *scs = dynamic_cast<SerContext<Symtab> *>(scb);
-
-	if (!scs)
-	{
-		fprintf(stderr, "%s[%d]:  SERIOUS:  FIXME\n", FILE__, __LINE__);
-		return false;
-	}
-
-	Symtab *st = scs->getScope();
-
-	if (!st)
-	{
-		fprintf(stderr, "%s[%d]:  SERIOUS:  FIXME\n", FILE__, __LINE__);
-		return false;
-	}
-
-	dyn_hash_map<Address, Symbol *> *smap = NULL;
-
-	if (!st->getAnnotation(smap, IdToSymAnno))
-	{
-		smap = new dyn_hash_map<Address, Symbol *>();
-
-		if (!st->addAnnotation(smap, IdToSymAnno))
-		{
-			fprintf(stderr, "%s[%d]:  ERROR:  failed to add IdToSymMap anno to Symtab\n", 
-					FILE__, __LINE__);
-			return false;
-		}
-	}
-
-	assert(smap);
-
-	if (serializer_debug_flag())
-	{
-		dyn_hash_map<Address, Symbol *>::iterator iter = smap->find(id);
-		if (iter != smap->end())
-		{
-			fprintf(stderr, "%s[%d]:  WARNING:  already have mapping for IdToSym\n", 
-					FILE__, __LINE__);
-		}
-	}
-
-	(*smap)[id] = sym;
-	return true;
-}
-
-Symbol * getSymForID(SerializerBase *sb, Address id)
-{
-	assert(id);
-	assert(sb);
-
-	SerContextBase *scb = sb->getContext();
-	if (!scb)
-	{
-		fprintf(stderr, "%s[%d]:  SERIOUS:  FIXME\n", FILE__, __LINE__);
-		return NULL;
-	}
-
-	SerContext<Symtab> *scs = dynamic_cast<SerContext<Symtab> *>(scb);
-
-	if (!scs)
-	{
-		fprintf(stderr, "%s[%d]:  SERIOUS:  FIXME\n", FILE__, __LINE__);
-		return NULL;
-	}
-
-	Symtab *st = scs->getScope();
-
-	if (!st)
-	{
-		fprintf(stderr, "%s[%d]:  SERIOUS:  FIXME\n", FILE__, __LINE__);
-		return NULL;
-	}
-
-	dyn_hash_map<Address, Symbol *> *smap = NULL;
-	if (!st->getAnnotation(smap, IdToSymAnno))
-	{
-		fprintf(stderr, "%s[%d]:  ERROR:  failed to find IdToSymMap anno on Symtab\n", 
-				FILE__, __LINE__);
-		return NULL;
-	}
-	assert(smap);
-	dyn_hash_map<Address, Symbol *>::iterator iter = smap->find(id);
-	if (iter == smap->end())
-	{
-		fprintf(stderr, "%s[%d]:  ERROR:  failed to find id %p in IdToSymMap\n", 
-				FILE__, __LINE__, (void *)id);
-		return NULL;
-	}
-	return iter->second;
-}
-#else
 bool addSymID(SerializerBase *, Symbol *, Address)
 {
    return false;
@@ -159,7 +55,7 @@ Symbol * getSymForID(SerializerBase *, Address)
 {
    return NULL;
 }
-#endif
+
 
 Symbol *Symbol::magicEmitElfSymbol() {
 	// I have no idea why this is the way it is,
@@ -176,19 +72,63 @@ Symbol *Symbol::magicEmitElfSymbol() {
                       false);
 }
     
-SYMTAB_EXPORT const string& Symbol::getMangledName() const 
+SYMTAB_EXPORT string Symbol::getMangledName() const 
 {
     return mangledName_;
 }
 
-SYMTAB_EXPORT const string& Symbol::getPrettyName() const 
+SYMTAB_EXPORT string Symbol::getPrettyName() const 
 {
-    return prettyName_;
+  std::string working_name = mangledName_;
+#if !defined(os_windows)        
+  //Remove extra stabs information
+  size_t colon, atat;
+  colon = working_name.find(":");
+  if(colon != string::npos) 
+  {
+    working_name = working_name.substr(0, colon);
+  }
+  atat = working_name.find("@@");
+  if(atat != string::npos)
+  {
+    working_name = working_name.substr(0, atat);
+  }
+  
+#endif     
+  // Assume not native (ie GNU) if we don't have an associated Symtab for some reason
+  bool native_comp = getSymtab() ? getSymtab()->isNativeCompiler() : false;
+  
+  char *prettyName = P_cplus_demangle(working_name.c_str(), native_comp, false);
+  if (prettyName) {
+    working_name = std::string(prettyName);
+    // XXX caller-freed
+    free(prettyName); 
+  }
+  return working_name;
 }
 
-SYMTAB_EXPORT const string& Symbol::getTypedName() const 
+SYMTAB_EXPORT string Symbol::getTypedName() const 
 {
-    return typedName_;
+  std::string working_name = mangledName_;
+  #if !defined(os_windows)        
+  //Remove extra stabs information
+  size_t colon;
+  colon = working_name.find(":");
+  if(colon != string::npos) 
+  {
+    working_name = working_name.substr(0, colon);
+  }
+#endif     
+  // Assume not native (ie GNU) if we don't have an associated Symtab for some reason
+  bool native_comp = getSymtab() ? getSymtab()->isNativeCompiler() : false;
+  
+  char *prettyName = P_cplus_demangle(working_name.c_str(), native_comp, true);
+  if (prettyName) {
+    working_name = std::string(prettyName);
+    // XXX caller-freed
+    free(prettyName); 
+  }
+  return working_name;
 }
 
 bool Symbol::setOffset(Offset newOffset)
@@ -211,6 +151,7 @@ bool Symbol::setLocalTOC(Offset toc)
 
 SYMTAB_EXPORT bool Symbol::setModule(Module *mod) 
 {
+    assert(mod);
     module_ = mod; 
     return true;
 }
@@ -292,15 +233,6 @@ SYMTAB_EXPORT bool Symbol::setVersionFileName(std::string &fileName)
    std::string *fn_p = NULL;
    if (getAnnotation(fn_p, SymbolFileNameAnno)) 
    {
-      if (!fn_p) 
-      {
-         fprintf(stderr, "%s[%d]:  inconsistency here\n", FILE__, __LINE__);
-      }
-      else
-      {
-         fprintf(stderr, "%s[%d]:  WARNING, already have filename set for symbol %s\n", 
-                 FILE__, __LINE__, getMangledName().c_str());
-      }
       return false;
    }
    else
@@ -309,7 +241,6 @@ SYMTAB_EXPORT bool Symbol::setVersionFileName(std::string &fileName)
       std::string *fn = new std::string(fileName);
       if (!addAnnotation(fn, SymbolFileNameAnno)) 
       {
-         fprintf(stderr, "%s[%d]:  failed to add anno here\n", FILE__, __LINE__);
          return false;
       }
       return true;
@@ -323,20 +254,11 @@ SYMTAB_EXPORT bool Symbol::setVersions(std::vector<std::string> &vers)
    std::vector<std::string> *vn_p = NULL;
    if (getAnnotation(vn_p, SymbolVersionNamesAnno)) 
    {
-      if (!vn_p) 
-      {
-         fprintf(stderr, "%s[%d]:  inconsistency here\n", FILE__, __LINE__);
-      }
-      else
-         fprintf(stderr, "%s[%d]:  WARNING, already have versions set for symbol %s\n", FILE__, __LINE__, getMangledName().c_str());
       return false;
    }
    else
    {
-      if (!addAnnotation(&vers, SymbolVersionNamesAnno)) 
-      {
-         fprintf(stderr, "%s[%d]:  failed to add anno here\n", FILE__, __LINE__);
-      }
+      addAnnotation(&vers, SymbolVersionNamesAnno);
    }
 
    return true;
@@ -348,11 +270,7 @@ SYMTAB_EXPORT bool Symbol::getVersionFileName(std::string &fileName)
 
    if (getAnnotation(fn_p, SymbolFileNameAnno)) 
    {
-      if (!fn_p) 
-      {
-         fprintf(stderr, "%s[%d]:  inconsistency here\n", FILE__, __LINE__);
-      }
-      else
+      if (fn_p) 
          fileName = *fn_p;
 
       return true;
@@ -367,11 +285,7 @@ SYMTAB_EXPORT bool Symbol::getVersions(std::vector<std::string> *&vers)
 
    if (getAnnotation(vn_p, SymbolVersionNamesAnno)) 
    {
-      if (!vn_p) 
-      {
-         fprintf(stderr, "%s[%d]:  inconsistency here\n", FILE__, __LINE__);
-      }
-      else
+      if (vn_p) 
       {
          vers = vn_p;
          return true;
@@ -413,10 +327,12 @@ std::ostream& Dyninst::SymtabAPI::operator<< (ostream &os, const Symbol &s)
         //<< " tag="     << (unsigned) s.tag_
                   << " tag="     << s.symbolTag2Str(s.tag_)
                   << " isAbs="   << s.isAbsolute_
+                  << " isDbg="   << s.isDebug_
                   << " isCommon=" << s.isCommonStorage_
                   << (s.isFunction() ? " [FUNC]" : "")
                   << (s.isVariable() ? " [VAR]" : "")
-                  << (s.isInSymtab() ? "[STA]" : "[DYN]")
+                  << (s.isInSymtab() ? "[STA]" : "")
+                  << (s.isInDynSymtab() ? "[DYN]" : "")
                   << " }";
 }
 
@@ -466,15 +382,16 @@ bool Symbol::operator==(const Symbol& s) const
 			&& (size_    == s.size_)
 			&& (isDynamic_ == s.isDynamic_)
 			&& (isAbsolute_ == s.isAbsolute_)
+			&& (isDebug_ == s.isDebug_)
                         && (isCommonStorage_ == s.isCommonStorage_)
 		   && (versionHidden_ == s.versionHidden_)
-			&& (mangledName_ == s.mangledName_)
-			&& (prettyName_ == s.prettyName_)
-			&& (typedName_ == s.typedName_));
+		   && (mangledName_ == s.mangledName_));
+		   //			&& (prettyName_ == s.prettyName_)
+		   //	&& (typedName_ == s.typedName_));
 }
 
 Symtab *Symbol::getSymtab() const { 
-   return module_->exec(); 
+  return module_ ? module_->exec() : NULL; 
 }
 
 Symbol::Symbol () :
@@ -491,10 +408,9 @@ Symbol::Symbol () :
   size_(0),
   isDynamic_(false),
   isAbsolute_(false),
+  isDebug_(false),
   aggregate_(NULL),
   mangledName_(Symbol::emptyString),
-  prettyName_(Symbol::emptyString),
-  typedName_(Symbol::emptyString),
   tag_(TAG_UNKNOWN) ,
   index_(-1),
   strindex_(-1),
@@ -529,10 +445,9 @@ Symbol::Symbol(const std::string& name,
   size_(s),
   isDynamic_(d),
   isAbsolute_(a),
+  isDebug_(false),
   aggregate_(NULL),
   mangledName_(name),
-  prettyName_(name),
-  typedName_(name),
   tag_(TAG_UNKNOWN),
   index_(index),
   strindex_(strindex),
@@ -547,12 +462,8 @@ Symbol::~Symbol ()
 
 	if (getAnnotation(sfa_p, SymbolFileNameAnno))
 	{
-		if (!removeAnnotation(SymbolFileNameAnno))
-		{
-			fprintf(stderr, "%s[%d]:  failed to remove file name anno\n", 
-					FILE__, __LINE__);
-		}
-		delete (sfa_p);
+           removeAnnotation(SymbolFileNameAnno);
+           delete (sfa_p);
 	}
 }
 
@@ -564,3 +475,4 @@ void Symbol::setReferringSymbol(Symbol* referringSymbol)
 Symbol* Symbol::getReferringSymbol() {
 	return referring_;
 }
+

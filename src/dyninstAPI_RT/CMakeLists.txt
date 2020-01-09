@@ -69,6 +69,11 @@ set (SRC_LIST_ppc64
     src/RTthread-powerpc-asm.S
     src/RTstatic_ctors_dtors-ppc64.c                                                                                         
 )
+set (SRC_LIST_aarch64
+    src/RTthread-aarch64.c
+    #src/RTthread-aarch64-asm.S
+    src/RTstatic_ctors_dtors-aarch64.c                                                                                         
+)
 
 
 # We use gcc to compile the various assembly files, but
@@ -98,6 +103,8 @@ elseif (PLATFORM MATCHES i386)
 set (SRC_LIST ${SRC_LIST} ${SRC_LIST_i386})
 elseif (PLATFORM MATCHES ppc32)
 set (SRC_LIST ${SRC_LIST} ${SRC_LIST_ppc32})
+elseif (PLATFORM MATCHES aarch64)
+set (SRC_LIST ${SRC_LIST} ${SRC_LIST_aarch64})
 endif()
 endif()
 
@@ -130,9 +137,6 @@ set_target_properties (dyninstAPI_RT_static PROPERTIES CLEAN_DIRECT_OUTPUT 1)
 
 message(STATUS "dyninstAPI RT library SOVERSION: ${SOVERSION}")
 message(STATUS "dyninstAPI RT library LIBVERSION: ${LIBVERSION}")
-
-get_property(dyninstAPI_RT_location TARGET dyninstAPI_RT PROPERTY LOCATION)
-message(STATUS "dyninstAPI output location: ${dyninstAPI_RT_location}")
 
 FILE (GLOB headers "h/*.h")
 # append, you fool!
@@ -221,6 +225,8 @@ INSTALL (TARGETS dyninstAPI_RT_m32 dyninstAPI_RT_m32_static
         ARCHIVE DESTINATION ${INSTALL_LIB_DIR}
         PUBLIC_HEADER DESTINATION ${INSTALL_INCLUDE_DIR})
 
+install (EXPORT DyninstTargets
+  DESTINATION "${INSTALL_CMAKE_DIR}")
 
 endif()
 endif()

@@ -99,6 +99,7 @@ void print_symbols( std::vector< Symbol *>& allsymbols ) {
                 case Symbol::SL_GLOBAL:  fprintf(fd, "  GL"); break;
                 case Symbol::SL_LOCAL:   fprintf(fd, "  LO"); break;
                 case Symbol::SL_WEAK:    fprintf(fd, "  WK"); break;
+                case Symbol::SL_UNIQUE:  fprintf(fd, "  UQ"); break;
             }
             switch (sym->getVisibility()) {
                 case Symbol::SV_UNKNOWN:   fprintf(fd, "  ???"); break;
@@ -114,6 +115,8 @@ void print_symbols( std::vector< Symbol *>& allsymbols ) {
                 fprintf(fd, " DYN");
             if (sym->isAbsolute())
                 fprintf(fd, " ABS");
+            if (sym->isDebug())
+                fprintf(fd, " DBG");
             std::string fileName;
             std::vector<std::string> *vers;
             if (sym->getVersionFileName(fileName))
@@ -388,7 +391,7 @@ SYMTAB_EXPORT AObject::~AObject()
 }
 
 // explicitly protected
-SYMTAB_EXPORT AObject::AObject(MappedFile *mf_, void (*err_func)(const char *)) 
+SYMTAB_EXPORT AObject::AObject(MappedFile *mf_, void (*err_func)(const char *), Symtab* st)
 : mf(mf_),
    code_ptr_(0), code_off_(0), code_len_(0),
    data_ptr_(0), data_off_(0), data_len_(0),
@@ -398,7 +401,8 @@ SYMTAB_EXPORT AObject::AObject(MappedFile *mf_, void (*err_func)(const char *))
    is_aout_(false), is_dynamic_(false),
    has_error(false), is_static_binary_(false),
    no_of_sections_(0), no_of_symbols_(0),
-   deferredParse(false), err_func_(err_func), addressWidth_nbytes(4)
+  deferredParse(false), parsedAllLineInfo(false), err_func_(err_func), addressWidth_nbytes(4),
+  associated_symtab(st)
 {
 }
 
@@ -524,7 +528,6 @@ Symbol *SymbolIter::currval()
 {
 	if (currentPositionInVector >= symbolIterator->second.size())
 	{
-		fprintf(stderr, "%s[%d]:  OUT OF RANGE\n", FILE__, __LINE__);
 		return NULL;
 	}
    return ((symbolIterator->second)[ currentPositionInVector ]);
@@ -551,3 +554,16 @@ bool AObject::getTruncateLinePaths()
 {
    return false;
 }
+
+void AObject::setModuleForOffset(Offset sym_off, std::string module) {
+    auto found_syms = symsByOffset_.find(sym_off);
+    if(found_syms == symsByOffset_.end()) return;
+
+    for(auto s = found_syms->second.begin();
+            s != found_syms->second.end();
+            ++s)
+    {
+        symsToModules_[*s] = module;
+    }
+}
+

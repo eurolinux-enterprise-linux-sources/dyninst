@@ -358,7 +358,22 @@ bool parse_block::isCallBlock()
     }
     return false;
 }
-
+bool parse_block::isIndirectTailCallBlock()
+{
+    const Block::edgelist & trgs = targets();
+    if(!trgs.empty())
+    {
+        for (Block::edgelist::const_iterator eit = trgs.begin();
+             eit != trgs.end();
+             eit++) 
+        {
+            if ((*eit)->type() == INDIRECT && (*eit)->interproc()) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
 image *parse_block::img()
 {
     vector<Function*> funcs;
@@ -576,7 +591,7 @@ bool parse_func::isInstrumentable() {
    else {
       // Create instrumentation points for non-plt functions 
       if(obj()->cs()->linkage().find(getOffset()) != obj()->cs()->linkage().end()) { 
-         return false;
+          return false;
       }
     }
 

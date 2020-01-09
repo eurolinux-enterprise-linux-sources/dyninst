@@ -44,17 +44,13 @@
 #include "RegisterConversion.h"
 //#include "Annotatable.h"
 
-#ifdef i386_unknown_nt4_0
-#define snprintf _snprintf
-#endif
-
 using namespace Dyninst;
 using namespace Dyninst::SymtabAPI;
 
-AnnotationClass<BPatch_cblock> CommonBlockUpPtrAnno("CommonBlockUpPtr");
-AnnotationClass<BPatch_localVar> LocalVarUpPtrAnno("LocalVarUpPtrAnno");
-AnnotationClass<BPatch_field> FieldUpPtrAnno("FieldUpPtrAnno");
-AnnotationClass<BPatch_type> TypeUpPtrAnno("TypeUpPtr");
+AnnotationClass<BPatch_cblock> CommonBlockUpPtrAnno("CommonBlockUpPtr", NULL);
+AnnotationClass<BPatch_localVar> LocalVarUpPtrAnno("LocalVarUpPtrAnno", NULL);
+AnnotationClass<BPatch_field> FieldUpPtrAnno("FieldUpPtrAnno", NULL);
+AnnotationClass<BPatch_type> TypeUpPtrAnno("TypeUpPtr", NULL);
 //static int findIntrensicType(const char *name);
 
 // This is the ID that is decremented for each type a user defines. It is
@@ -84,7 +80,7 @@ BPatch_type *BPatch_type::createFake(const char *_name) {
  * 
  */
 
-BPatch_type::BPatch_type(Type *typ_): ID(typ_->getID()), typ(typ_),
+BPatch_type::BPatch_type(Type *typ_): ID(typ_->getID()), typ(typ_), owns_typ(false),
     refCount(1)
 {
 	// if a derived type, make sure the upPtr is set for the base type.
@@ -102,10 +98,10 @@ BPatch_type::BPatch_type(Type *typ_): ID(typ_->getID()), typ(typ_),
 		{
 			//fprintf(stderr, "%s[%d]:  failed to get up ptr here\n", FILE__, __LINE__);
 
-			BPatch_type* dyninstType = new BPatch_type(base);
+			//BPatch_type* dyninstType = new BPatch_type(base);
 			// We might consider registering this new type in BPatch.
 			// For now, just silence the warning:
-			(void) dyninstType;
+			//(void) dyninstType;
 		}
 		else
 		{
@@ -121,7 +117,7 @@ BPatch_type::BPatch_type(Type *typ_): ID(typ_->getID()), typ(typ_),
 }
 
 BPatch_type::BPatch_type(const char *_name, int _ID, BPatch_dataClass _type) :
-   ID(_ID), type_(_type), typ(NULL), refCount(1)
+   ID(_ID), type_(_type), typ(NULL), owns_typ(true), refCount(1)
 {
 	if (_name != NULL)
 		typ = new Type(_name, ID, convertToSymtabType(_type));
@@ -151,6 +147,9 @@ BPatch_type *BPatch_type::findOrCreateType(Dyninst::SymtabAPI::Type *type)
  */
 BPatch_type::~BPatch_type()
 {
+    if(owns_typ) {
+        typ->decrRefCount();
+    }
 }
 
 bool BPatch_type::operator==(const BPatch_type &otype) const 

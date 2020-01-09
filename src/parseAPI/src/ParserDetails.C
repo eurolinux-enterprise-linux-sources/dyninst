@@ -60,46 +60,45 @@ verbose_log(Address currAddr, Edges_t::iterator & curEdge)
     switch(curEdge->second)
     {
         case CALL:
-            parsing_printf("%s[%d]: adding call edge %x->%x\n",
+            parsing_printf("%s[%d]: adding call edge %lx->%lx\n",
                            FILE__, __LINE__, currAddr, curEdge->first);
 	    break;
         case CALL_FT:
-            parsing_printf("%s[%d]: adding function fallthrough edge %x->%x\n",
+            parsing_printf("%s[%d]: adding function fallthrough edge %lx->%lx\n",
                            FILE__, __LINE__, currAddr, curEdge->first);
             break;
         case FALLTHROUGH:
-            parsing_printf("%s[%d]: adding fallthrough edge %x->%x\n",
+            parsing_printf("%s[%d]: adding fallthrough edge %lx->%lx\n",
                            FILE__, __LINE__, currAddr, curEdge->first);
             break;
         case COND_TAKEN:
-            parsing_printf("%s[%d]: adding conditional taken edge %x->%x\n",
+            parsing_printf("%s[%d]: adding conditional taken edge %lx->%lx\n",
                            FILE__, __LINE__, currAddr, curEdge->first);
             break;
         case COND_NOT_TAKEN:
-            parsing_printf("%s[%d]: adding conditional not taken edge %x->%x\n",
+            parsing_printf("%s[%d]: adding conditional not taken edge %lx->%lx\n",
                            FILE__, __LINE__, currAddr, curEdge->first);
             break;
         case INDIRECT:
-            parsing_printf("%s[%d]: adding indirect edge %x->%x\n",
+            parsing_printf("%s[%d]: adding indirect edge %lx->%lx\n",
                            FILE__, __LINE__, currAddr, curEdge->first);
             break;
         case DIRECT:
-            parsing_printf("%s[%d]: adding direct edge %x->%x\n",
+            parsing_printf("%s[%d]: adding direct edge %lx->%lx\n",
                            FILE__, __LINE__, currAddr, curEdge->first);
             break;
         case CATCH:
-            parsing_printf("%s[%d]: adding catch block edge %x->%x\n",
+            parsing_printf("%s[%d]: adding catch block edge %lx->%lx\n",
                            FILE__, __LINE__, currAddr, curEdge->first);
             break;
         default:
-            parsing_printf("%s[%d]: adding unknown edge type %d edge %x->%x\n",
+            parsing_printf("%s[%d]: adding unknown edge type %d edge %lx->%lx\n",
                            FILE__, __LINE__, curEdge->second, currAddr, curEdge->first);
             break;
     }
 #endif // VERBOSE_EDGE_LOG
 }
 } // anonymous namespace
-
 
 static void 
 getBlockInsns(Block &blk, std::set<Address> &addrs)
@@ -423,7 +422,7 @@ void Parser::ProcessCFInsn(
     
     // Instruction adapter provides edge estimates from an instruction
     parsing_printf("Getting edges\n");
-    ah.getNewEdges(edges_out, frame.func, cur, frame.num_insns, &plt_entries); 
+    ah.getNewEdges(edges_out, frame.func, cur, frame.num_insns, &plt_entries, frame.knownTargets); 
     parsing_printf("Returned %d edges\n", edges_out.size());
     if (unlikely(_obj.defensiveMode() && !ah.isCall() && edges_out.size())) {
         // only parse branch edges that align with existing blocks
@@ -510,7 +509,7 @@ void Parser::ProcessCFInsn(
         if(!is_code(frame.func,curEdge->first) &&
            !HASHDEF(plt_entries,curEdge->first))
         {
-            if(curEdge->second != NOEDGE || !dynamic_call) {
+            if(curEdge->second != CALL || !dynamic_call) {
                 has_unres = true;
                 resolvable_edge = false;
                 if ((int)curEdge->second != -1 && _obj.defensiveMode()) 
@@ -522,25 +521,18 @@ void Parser::ProcessCFInsn(
         /*
          * Call case 
          */ 
-        if(curEdge->second == NOEDGE)
+        if(curEdge->second == CALL)
         {
             // call callback
             resolvable_edge = resolvable_edge && !dynamic_call;
             ProcessCallInsn(frame,cur,ah,dynamic_call,
                 absolute_call,resolvable_edge,curEdge->first);
 
-            tailcall = !dynamic_call && 
-               ah.isTailCall(frame.func, CALL, frame.num_insns);
             if(resolvable_edge) {
-                if (tailcall) {
-                    newedge = link_tempsink(cur,DIRECT);
-                } else newedge = link_tempsink(cur,CALL);
+                 newedge = link_tempsink(cur,CALL);
             }
             else { 
-                if (tailcall) {
-                    newedge = link(cur,_sink,INDIRECT,true);
-                }
-                else newedge = link(cur,_sink,CALL,true);
+                newedge = link(cur,_sink,CALL,true);
             }
             if(!ah.isCall()) {
                parsing_printf("Setting edge 0x%lx (0x%lx/0x%lx) to interproc\n",
@@ -562,12 +554,13 @@ void Parser::ProcessCFInsn(
                 newedge = link(cur,_sink,curEdge->second,true);
         }
 
-        if (ah.isTailCall(frame.func, curEdge->second, frame.num_insns)) {
-           parsing_printf("Setting edge 0x%lx (0x%lx/0x%lx) to interproc (tail call)\n",
+        if (ah.isTailCall(frame.func, curEdge->second, frame.num_insns, frame.knownTargets)) {
+            tailcall = true; 
+            parsing_printf("Setting edge 0x%lx (0x%lx/0x%lx) to interproc (tail call)\n",
                           newedge,
                           newedge->src()->start(),
                           newedge->trg()->start());
-           newedge->_type._interproc = true;
+	    newedge->_type._interproc = true;
         }
 
         if(!bundle) {
@@ -576,7 +569,7 @@ void Parser::ProcessCFInsn(
         }
 
         verbose_log(ah.getAddr(),curEdge);
-
+	parsing_printf("resolveable_edge: %d, tailcall: %d, target: %lx\n", resolvable_edge, tailcall, curEdge->first);
         ParseWorkElem * we = 
           bundle->add(
             new ParseWorkElem(
@@ -586,6 +579,7 @@ void Parser::ProcessCFInsn(
                 resolvable_edge,
                 tailcall)
           );
+	frame.knownTargets.insert(curEdge->first);
 
         // We will not attempt to further process
         // unresolvable edges; they stay sinks
@@ -598,15 +592,14 @@ void Parser::ProcessCFInsn(
                 // update the underlying code bytes for CF targets
                 if (  CALL == curEdge->second
                       || DIRECT == curEdge->second
-                      || COND_TAKEN == curEdge->second
-					  || NOEDGE == curEdge->second)
+                      || COND_TAKEN == curEdge->second)
                 {
 
                     _pcb.updateCodeBytes(curEdge->first);
                 }
             }
         } 
-        else if( unlikely(_obj.defensiveMode() && NOEDGE != curEdge->second) )
+        else if( unlikely(_obj.defensiveMode()) )
         {   
             ProcessUnresBranchEdge(frame, cur, ah, curEdge->first);
         }

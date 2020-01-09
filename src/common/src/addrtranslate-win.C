@@ -29,7 +29,6 @@
  */
 
 #include <stdio.h>
-#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
 #include <vector>
@@ -171,5 +170,5 @@ AddressTranslateWin::AddressTranslateWin(PID pid, PROC_HANDLE phandle_) :
 
 Address AddressTranslateWin::getLibraryTrapAddrSysV()
 {
-   return 0x0;
+	return reinterpret_cast<Address>(&::LoadLibraryEx);
 }

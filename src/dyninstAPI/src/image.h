@@ -73,6 +73,7 @@
 #include "dyninstAPI/src/Parsing.h"
 
 
+using namespace std;
 using namespace Dyninst;
 
 typedef bool (*functionNameSieve_t)(const char *test,void *data);
@@ -238,10 +239,12 @@ class image_variable {
 
     Address getOffset() const;
 
-    const string &symTabName() const { return var_->getAllMangledNames()[0]; }
-    const vector<string>&  symTabNameVector() const;
-    const vector<string>& prettyNameVector() const;
-
+    string symTabName() const { return var_->getFirstSymbol()->getMangledName(); }
+    SymtabAPI::Aggregate::name_iter symtab_names_begin() const;
+    SymtabAPI::Aggregate::name_iter symtab_names_end() const;
+    SymtabAPI::Aggregate::name_iter pretty_names_begin() const;
+    SymtabAPI::Aggregate::name_iter pretty_names_end() const;
+    
     bool addSymTabName(const std::string &, bool isPrimary = false);
     bool addPrettyName(const std::string &, bool isPrimary = false);
 
@@ -296,7 +299,7 @@ class image : public codeRange {
          bool parseGaps);
 
    void analyzeIfNeeded();
-
+   bool isParsed() { return parseState_ == analyzed; }
    parse_func* addFunction(Address functionEntryAddr, const char *name=NULL);
 
    // creates the module if it does not exist
@@ -445,7 +448,7 @@ class image : public codeRange {
    // Platform-specific discovery of the "main" function
    // FIXME There is a minor but fundamental design flaw that
    //       needs to be resolved wrt findMain returning void.
-   void findMain();
+   int findMain();
 
    bool determineImageType();
    bool addSymtabVariables();

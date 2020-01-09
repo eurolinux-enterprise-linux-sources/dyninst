@@ -44,8 +44,7 @@
 
 #include <set>
 #include <limits>
-
-using namespace std;
+#include <ostream>
 
 /** Template class for Interval Binary Search Tree. The implementation is
   * based on a red-black tree (derived from our codeRange implementation)
@@ -84,44 +83,33 @@ namespace IBS {
 typedef enum { TREE_RED, TREE_BLACK } color_t;
 };
 
-template<class T = unsigned long>
-class interval {
+
+template <typename T = int, typename U = void*>
+class SimpleInterval
+{
   public:
-    interval() { }
-    virtual ~interval() { }
-
-    virtual T low() const = 0;
-    virtual T high() const = 0;
-
     typedef T type;
-};
-
-class SimpleInterval : public interval<int> {
-  public:
-    SimpleInterval( interval<int> & i, void * id ) {
-        low_ = i.low();
-        high_ = i.high();
-        id_ = id;
-    }
-    SimpleInterval(int low, int high, void * id) {
+    SimpleInterval(T low, T high, U id) {
         low_ = low;
         high_ = high;
         id_ = id;
     }
+    SimpleInterval() {}
+    virtual ~SimpleInterval() {}
 
-    virtual int low() const { return low_; }
-    virtual int high() const { return high_; }
-
-  private:
-    int low_;
-    int high_;
-    void * id_; // some arbitrary unique identifier
+    virtual T low() const { return low_; }
+    virtual T high() const { return high_; }
+    virtual U id() const { return id_; }
+  protected:
+    T low_;
+    T high_;
+    U id_; // some arbitrary unique identifier
 };
 
 template<class ITYPE>
 class IBSTree;
 
-template<class ITYPE = interval<> >
+template<class ITYPE = SimpleInterval<> >
 class IBSNode {
     friend class IBSTree<ITYPE>;
     typedef typename ITYPE::type interval_type;
@@ -144,15 +132,25 @@ class IBSNode {
     ~IBSNode() { }
 
     interval_type value() const { return val_; };
+    interval_type operator*() const { return value; }
+    friend std::ostream& operator<<(std::ostream& stream, const IBSNode<ITYPE>& node)
+    {
+        if(node.left) stream << *(node.left);
+        stream << node.val_ << std::endl;
+        if(node.right) stream << *(node.right);
+        return stream;
+
+    }
+
 
   private: 
     /* The endpoint of an interval range */
     interval_type val_;
 
     /* Intervals indexed by this node */
-    set<ITYPE *> less;
-    set<ITYPE *> greater;
-    set<ITYPE *> equal;
+    std::set<ITYPE *> less;
+    std::set<ITYPE *> greater;
+    std::set<ITYPE *> equal;
 
     IBS::color_t color;
 
@@ -161,9 +159,17 @@ class IBSNode {
     IBSNode<ITYPE> *parent;
 };
 
-template<class ITYPE = interval<> >
+template<class ITYPE = SimpleInterval<> >
 class IBSTree {
+public:
     typedef typename ITYPE::type interval_type;
+    typedef IBSNode<ITYPE>* iterator;
+    typedef const IBSNode<ITYPE>* const_iterator;
+    typedef ITYPE value_type;
+    typedef value_type& reference;
+    typedef const value_type& const_reference;
+    typedef size_t difference_type;
+    typedef size_t size_type;
 
     IBSNode<ITYPE> *nil;
 
@@ -210,8 +216,8 @@ class IBSTree {
     /** Delete all nodes in the subtree rooted at the parameter **/
     void destroy(IBSNode<ITYPE> *);
 
-    void findIntervals(interval_type X, IBSNode<ITYPE> *R, set<ITYPE *> &S) const;
-    void findIntervals(ITYPE *I, IBSNode<ITYPE> *R, set<ITYPE *> &S) const;
+    void findIntervals(interval_type X, IBSNode<ITYPE> *R, std::set<ITYPE *> &S) const;
+    void findIntervals(ITYPE *I, IBSNode<ITYPE> *R, std::set<ITYPE *> &S) const;
 
     void PrintPreorder(IBSNode<ITYPE> *n);
 
@@ -219,6 +225,10 @@ class IBSTree {
     int CountMarks(IBSNode<ITYPE> *R) const;
 
     unsigned MemUse() const;
+    friend std::ostream& operator<<(std::ostream& stream, const IBSTree<ITYPE>& tree)
+    {
+        return stream << *(tree.root);
+    };
 
   public:
 
@@ -237,7 +247,18 @@ class IBSTree {
         delete nil;
     }
 
-    int size() const { return treeSize; }
+    size_type size() const { return treeSize; }
+    const_iterator begin() const {
+        iterator b = root;
+        while(root->left) b = root->left;
+        return b;
+    }
+    const_iterator end() const {
+        iterator e = root;
+        while(root->right) e = root->right;
+        return e;
+
+    }
     int CountMarks() const;
     
     bool empty() const { return (root == nil); }
@@ -248,12 +269,12 @@ class IBSTree {
 
     /** Find all intervals that overlap the provided point. Returns
         the number of intervals found **/  
-    int find(interval_type, set<ITYPE *> &) const;
-    int find(ITYPE *I, set<ITYPE *> &) const;
+    int find(interval_type, std::set<ITYPE *> &) const;
+    int find(ITYPE *I, std::set<ITYPE *> &) const;
 
     /** Finds the very next interval(s) with left endpoint
         = supremum(X) **/
-    void successor(interval_type X, set<ITYPE *> &) const; 
+    void successor(interval_type X, std::set<ITYPE *> &) const; 
     /** Use only when no two intervals share the same lower bound **/
     ITYPE * successor(interval_type X) const;
 
@@ -303,18 +324,18 @@ void IBSTree<ITYPE>::rightRotate(IBSNode<ITYPE> *pivot)
     //    (before rotation), remove the mark from pivot's > and = slots
     //    (preserving maximality).
 
-    typename set< ITYPE * >::iterator it = y->greater.begin();
+    typename std::set< ITYPE * >::iterator it = y->greater.begin();
     while( it != y->greater.end() )
     {
         ITYPE *tmp = *it;
     
-        typename set< ITYPE *>::iterator pit = pivot->greater.find( tmp );
+        typename std::set< ITYPE *>::iterator pit = pivot->greater.find( tmp );
         if(pit == pivot->greater.end()) {
             // Case 2
             pivot->less.insert( tmp );
             // remove from y's >. This invalidates the iterator, so
             // update first
-            typename set< ITYPE * >::iterator del = it;
+            typename std::set< ITYPE * >::iterator del = it;
             ++it;
             y->greater.erase( del );
         } else {
@@ -361,18 +382,18 @@ void IBSTree<ITYPE>::leftRotate(IBSNode<ITYPE> *pivot)
     y->greater.insert(pivot->greater.begin(),pivot->greater.end());
     y->equal.insert(pivot->greater.begin(),pivot->greater.end());
 
-    typename set< ITYPE * >::iterator it = y->less.begin();
+    typename std::set< ITYPE * >::iterator it = y->less.begin();
     while( it != y->less.end() )
     {
         ITYPE *tmp = *it;
     
-        typename set< ITYPE *>::iterator pit = pivot->less.find( tmp );
+        typename std::set< ITYPE *>::iterator pit = pivot->less.find( tmp );
         if(pit == pivot->less.end()) {
             // Case 2
             pivot->greater.insert( tmp );
             // remove from y's <. This invalidates the iterator, so
             // update first
-            typename set< ITYPE * >::iterator del = it;
+            typename std::set< ITYPE * >::iterator del = it;
             ++it;
             y->less.erase( del );
         } else {
@@ -551,7 +572,7 @@ IBSTree<ITYPE>::rightUp(IBSNode<ITYPE> *R)
             return R->parent->value();
         R = R->parent; 
     }
-    return numeric_limits<interval_type>::max();
+    return std::numeric_limits<interval_type>::max();
 }
 
 /* Same as rightUp, only looking for the nearest ancestor node that
@@ -566,7 +587,7 @@ IBSTree<ITYPE>::leftUp(IBSNode<ITYPE> *R)
         R = R->parent;
     }
     // XXX is this right? for unsigned values, min() is a possible value
-    return numeric_limits<interval_type>::min();
+    return std::numeric_limits<interval_type>::min();
 }
 
 /* Restore RB-tree invariants after node insertion */
@@ -635,7 +656,7 @@ void IBSTree<ITYPE>::destroy(IBSNode<ITYPE> *n)
 }*/
 
 template<class ITYPE>
-void IBSTree<ITYPE>::findIntervals(interval_type X, IBSNode<ITYPE> *R, set<ITYPE *> &S) const
+void IBSTree<ITYPE>::findIntervals(interval_type X, IBSNode<ITYPE> *R, std::set<ITYPE *> &S) const
 {
     while(R != nil) {
         if(X == R->value()) {
@@ -663,7 +684,7 @@ void IBSTree<ITYPE>::findIntervals(interval_type X, IBSNode<ITYPE> *R, set<ITYPE
       than a pointwise stabbing query.
 */
 template<class ITYPE>
-void IBSTree<ITYPE>::findIntervals(ITYPE * I, IBSNode<ITYPE> *R, set<ITYPE *> &S) const
+void IBSTree<ITYPE>::findIntervals(ITYPE * I, IBSNode<ITYPE> *R, std::set<ITYPE *> &S) const
 {
     if(R == nil) return;
 
@@ -771,7 +792,7 @@ void IBSTree<ITYPE>::remove(ITYPE * range)
 }
 
 template<class ITYPE>
-int IBSTree<ITYPE>::find(interval_type X, set<ITYPE *> &out) const
+int IBSTree<ITYPE>::find(interval_type X, std::set<ITYPE *> &out) const
 {
     unsigned size = out.size();
     findIntervals(X,root,out);
@@ -779,7 +800,7 @@ int IBSTree<ITYPE>::find(interval_type X, set<ITYPE *> &out) const
 }
 
 template<class ITYPE>
-int IBSTree<ITYPE>::find(ITYPE * I, set<ITYPE *> &out) const
+int IBSTree<ITYPE>::find(ITYPE * I, std::set<ITYPE *> &out) const
 {
     unsigned size = out.size();
     findIntervals(I,root,out);
@@ -787,7 +808,7 @@ int IBSTree<ITYPE>::find(ITYPE * I, set<ITYPE *> &out) const
 }
 
 template<class ITYPE>
-void IBSTree<ITYPE>::successor(interval_type X, set<ITYPE *> &out) const
+void IBSTree<ITYPE>::successor(interval_type X, std::set<ITYPE *> &out) const
 {
     IBSNode<ITYPE> *n = root;
     IBSNode<ITYPE> *last = nil;
@@ -798,7 +819,7 @@ void IBSTree<ITYPE>::successor(interval_type X, set<ITYPE *> &out) const
     while(1) {
         if(n == nil) {
             if(last != nil) {
-                typename set<ITYPE *>::iterator sit = last->equal.begin();
+                typename std::set<ITYPE *>::iterator sit = last->equal.begin();
                 for( ; sit != last->equal.end(); ++sit) {
                    if((*sit)->low() == last->value()) out.insert(*sit);
                 }
@@ -834,7 +855,7 @@ void IBSTree<ITYPE>::successor(interval_type X, set<ITYPE *> &out) const
 template<class ITYPE>
 ITYPE * IBSTree<ITYPE>::successor(interval_type X) const
 {
-    set<ITYPE *> out;
+    std::set<ITYPE *> out;
     successor(X,out);
     assert( out.size() <= 1 );
     if(!out.empty())
@@ -881,11 +902,15 @@ void IBSTree<ITYPE>::PrintPreorder(IBSNode<ITYPE> *n)
     }
 }
 
+
+
 template<class ITYPE>
 int IBSTree<ITYPE>::CountMarks() const
 {
     return CountMarks(root);
 }
-} /* Dyninst */
+}/* Dyninst */
+
+
 #endif
 

@@ -41,6 +41,7 @@
 #include "BPatch_memoryAccess_NP.h"
 //#include "BPatch_dependenceGraphNode.h"
 // class BPatch_dependenceGraphNode;
+#include "StackMod.h"
 
 class func_instance;
 class InstrucIter;
@@ -339,12 +340,14 @@ public:
 
     bool getAddressRange(void * &start, void * &end);
 
-               bool getAddressRange(Dyninst::Address &start, Dyninst::Address &end);
+    bool getAddressRange(Dyninst::Address &start, Dyninst::Address &end);
 
     unsigned int getFootprint();
     BPatch_variableExpr *getFunctionRef();
     bool findOverlapping(BPatch_Vector<BPatch_function *> &funcs);
 
+    // Add stack modifications
+    bool addMods(std::set<StackMod*>);
 };
 
 #endif /* _BPatch_function_h_ */

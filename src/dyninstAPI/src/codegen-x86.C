@@ -49,6 +49,8 @@
 #include "instructionAPI/h/RegisterIDs.h"
 #include "pcrel.h"
 
+#include "StackMod/StackAccess.h"
+
 #if defined(os_vxworks)
 #include "common/src/wtxKludges.h"
 #endif
@@ -56,6 +58,7 @@
 using namespace std;
 using namespace boost::assign;
 using namespace Dyninst::InstructionAPI;
+
 
 #define MODRM_MOD(x) ((x) >> 6)
 #define MODRM_RM(x) ((x) & 7)
@@ -282,6 +285,7 @@ void insnCodeGen::generateBranch(codeGen &gen,
 void insnCodeGen::generatePush64(codeGen &gen, Address val)
 {
   GET_PTR(insn, gen);
+#if 0
   for (int i = 3; i >= 0; i--) {
     unsigned short word = static_cast<unsigned short>((val >> (16 * i)) & 0xffff);
     *insn++ = 0x66; // operand size override
@@ -289,6 +293,24 @@ void insnCodeGen::generatePush64(codeGen &gen, Address val)
     *(unsigned short *)insn = word;
     insn += 2;
   }
+#endif
+  // NOTE: The size of this generated instruction(+1 for the ret) is stored in CALL_ABS64_SZ
+  unsigned int high = static_cast<unsigned int>(val >> 32);
+  unsigned int low = static_cast<unsigned int>(val);
+
+  // push the low 4
+  *insn++ = 0x68; 
+  *(unsigned int*)insn = low;
+  insn += 4;
+
+  // move the high 4 to rsp+4
+  *insn++ = 0xC7;
+  *insn++ = 0x44;
+  *insn++ = 0x24;
+  *insn++ = 0x04;
+  *(unsigned int*)insn = high;
+  insn += 4;
+
   SET_PTR(insn, gen);
 }
 
@@ -1139,117 +1161,336 @@ bool insnCodeGen::modifyCall(Address targetAddr, NS_x86::instruction &insn, code
    return true;
 }
 
-bool insnCodeGen::modifyData(Address targetAddr, instruction &insn, codeGen &gen) {
-     // We may need to change these from 32-bit relative
-   // to 64-bit absolute. This happens with the jumps and calls
-   // as well, but it's better encapsulated there.
-   
-   // We have three options:
-   // a) 32-bit relative (AKA "original").
-   // b) 32-bit absolute version (where 32-bit relative would fail but we're low)
-   // c) 64-bit absolute version
-   const unsigned char *origInsn = insn.ptr();
-   unsigned insnType = insn.type();
-   unsigned insnSz = insn.size();   
-   Address from = gen.currAddr();
+bool insnCodeGen::modifyData(Address targetAddr, instruction &insn, codeGen &gen) 
+{
+    // We may need to change these from 32-bit relative
+    // to 64-bit absolute. This happens with the jumps and calls
+    // as well, but it's better encapsulated there.
 
-   bool is_data_abs64 = false;
-   signed long newDisp = targetAddr - from;
-   GET_PTR(newInsn, gen);
+    // We have three options:
+    // a) 32-bit relative (AKA "original").
+    // b) 32-bit absolute version (where 32-bit relative would fail but we're low)
+    // c) 64-bit absolute version
+    const unsigned char *origInsn = insn.ptr();
+    const unsigned char* origInsnStart = origInsn;
+    // unsigned insnType = insn.type();
+    unsigned insnSz = insn.size();
+    Address from = gen.currAddr();
 
-   Register pointer_reg = (Register)-1;
-     
-#if defined(arch_x86_64)	
-   // count opcode bytes (1 or 2)
-   unsigned nPrefixes = count_prefixes(insnType);
-   unsigned nOpcodeBytes = 1;
-   if (*(origInsn + nPrefixes) == 0x0F) {
-      nOpcodeBytes = 2;
-       // 3-byte opcode support
-       if ((*(origInsn + nPrefixes) == 0x0F) && (*(origInsn + nPrefixes + 1) == 0x38 || *(origInsn + nPrefixes + 1) == 0x3A)) {
-          nOpcodeBytes = 3;  
-       }
-   }
+    bool is_data_abs64 = false;
+    signed long newDisp = targetAddr - from;
+    GET_PTR(newInsn, gen);
 
-   if (!is_disp32(newDisp+insnSz) && !is_addr32(targetAddr)) {
-      // Case C: replace with 64-bit.
-      is_data_abs64 = true;
-      unsigned char mod_rm = *(origInsn + nPrefixes + nOpcodeBytes);
-      pointer_reg = (mod_rm & 0x38) != 0 ? 0 : 3;
-      SET_PTR(newInsn, gen);
-      emitPushReg64(pointer_reg, gen);
-      emitMovImmToReg64(pointer_reg, targetAddr, true, gen);
-      REGET_PTR(newInsn, gen);
-   }
-#endif
+    Register pointer_reg = (Register)-1;
 
-   const unsigned char* origInsnStart = origInsn;
+    /******************************************* prefix/opcode ****************/
 
-   // In other cases, we can rewrite the insn directly; in the 64-bit case, we
-   // still need to copy the insn
-   from += copy_prefixes(origInsn, newInsn, insnType);
+    ia32_instruction instruct;
 
-   if (*origInsn == 0x0F) {
-      *newInsn++ = *origInsn++;
-       // 3-byte opcode support
-       if (*origInsn == 0x38 || *origInsn == 0x3A) {
-           *newInsn++ = *origInsn++;
-       }
-   }
-     
-   // And the normal opcode
-   *newInsn++ = *origInsn++;
-   
-   if (is_data_abs64) {
-      // change ModRM byte to use [pointer_reg]: requires
-      // us to change last three bits (the r/m field)
-      // to the value of pointer_reg
-      unsigned char mod_rm = *origInsn++;
-      assert(pointer_reg != (Register)-1);
-      mod_rm = (mod_rm & 0xf8) + pointer_reg;
-      *newInsn++ = mod_rm;
-   }
-   else if (is_disp32(newDisp+insnSz)) {
-      // Whee easy case
-      *newInsn++ = *origInsn++;
-      // Size doesn't change....
-      *((int *)newInsn) = (int)(newDisp - insnSz);
-      newInsn += 4;
-   }
-   else if (is_addr32(targetAddr)) {
-      assert(!is_disp32(newDisp+insnSz));
-      unsigned char mod_rm = *origInsn++;
-      
-      // change ModRM byte to use SIB addressing (r/m == 4)
-      mod_rm = (mod_rm & 0xf8) + 4;
-      *newInsn++ = mod_rm;
-      
-      // SIB == 0x25 specifies [disp32] addressing when mod == 0
-      *newInsn++ = 0x25;
-      
-      // now throw in the displacement (the absolute 32-bit address)
-      *((int *)newInsn) = (int)(targetAddr);
-      newInsn += 4;
-   }
-   else {
-      // Should never be reached...
-      assert(0);
-   }
-   
-   // there may be an immediate after the displacement for RIP-relative
-   // so we copy over the rest of the instruction here
-   origInsn += 4;
-   while (origInsn - origInsnStart < (int)insnSz)
-      *newInsn++ = *origInsn++;
-   
-   SET_PTR(newInsn, gen);
-   
+    /**
+     * This information is generated during ia32_decode. To make this faster
+     * We are only going to do the prefix and opcode decodings
+     */
+    if(!ia32_decode_prefixes(origInsn, instruct))
+        assert(!"Couldn't decode prefix of already known instruction!\n");
+
+    /* get the prefix count */
+    size_t pref_count = instruct.getSize();
+    origInsn += pref_count;
+
+    /* Decode the opcode */
+    if(ia32_decode_opcode(0, origInsn, instruct, NULL) < 0)
+        assert(!"Couldn't decode opcode of already known instruction!\n");
+
+    /* Calculate the amount of opcode bytes */
+    size_t opcode_len = instruct.getSize() - pref_count;
+    origInsn += opcode_len;
+
+    /* Get the value of the Mod/RM byte */
+    unsigned char mod_rm = *origInsn++;
+
 #if defined(arch_x86_64)
-   if (is_data_abs64) {
-      // Cleanup on aisle pointer_reg...
-      assert(pointer_reg != (Register)-1);
-      emitPopReg64(pointer_reg, gen);
-   }
+    if (!is_disp32(newDisp+insnSz) && !is_addr32(targetAddr)) 
+    {
+        // Case C: replace with 64-bit.
+        // This preamble must come before any writes to newInsn!
+        is_data_abs64 = true;
+        pointer_reg = (mod_rm & 0x38) != 0 ? 0 : 3;
+        SET_PTR(newInsn, gen);
+        emitPushReg64(pointer_reg, gen);
+        emitMovImmToReg64(pointer_reg, targetAddr, true, gen);
+        REGET_PTR(newInsn, gen);
+    }
 #endif
-   return true;
-} 
+
+    /* copy the prefix and opcode bytes */
+    memcpy(newInsn, origInsnStart, pref_count + opcode_len);
+    newInsn += pref_count + opcode_len;
+
+    if (is_data_abs64)
+    {
+        // change ModRM byte to use [pointer_reg]: requires
+        // us to change last three bits (the r/m field)
+        // to the value of pointer_reg
+
+        mod_rm = (mod_rm & 0xf8) | pointer_reg;
+        /* Set the new ModR/M byte of the new instruction */
+        *newInsn++ = mod_rm;
+    } else if (is_disp32(newDisp + insnSz)) 
+    {
+        /* Instruction can remain a 32 bit instruction */
+
+        /* Copy the ModR/M byte */
+        *newInsn++ = mod_rm;
+        /* Use the new relative displacement */
+        *((int *)newInsn) = (int)(newDisp - insnSz);
+        newInsn += 4;
+    } else if (is_addr32(targetAddr)) 
+    {
+        // change ModRM byte to use SIB addressing (r/m == 4)
+        mod_rm = (mod_rm & 0xf8) + 4;
+        *newInsn++ = mod_rm;
+
+        // SIB == 0x25 specifies [disp32] addressing when mod == 0
+        *newInsn++ = 0x25;
+
+        // now throw in the displacement (the absolute 32-bit address)
+        *((int *)newInsn) = (int)(targetAddr);
+        newInsn += 4;
+    } else {
+        /* Impossible case */
+        assert(0);
+    }
+
+    // there may be an immediate after the displacement for RIP-relative
+    // so we copy over the rest of the instruction here
+    origInsn += 4;
+    while (origInsn - origInsnStart < (int)insnSz)
+        *newInsn++ = *origInsn++;
+
+    SET_PTR(newInsn, gen);
+
+#if defined(arch_x86_64)
+    if (is_data_abs64) {
+        // Cleanup on aisle pointer_reg...
+        assert(pointer_reg != (Register)-1);
+        emitPopReg64(pointer_reg, gen);
+    }
+#endif
+
+    return true;
+}
+
+bool insnCodeGen::modifyDisp(signed long newDisp, instruction &insn, codeGen &gen, Architecture arch, Address addr) {
+
+    relocation_cerr << "\t\tmodifyDisp "
+        << std::hex << addr
+        << std::dec << ", newDisp = " << newDisp << endl;
+
+    const unsigned char* origInsn = insn.ptr();
+    unsigned insnSz = insn.size();
+
+    unsigned newInsnSz = 0;
+
+    InstructionAPI::InstructionDecoder d2(origInsn, insnSz, arch);
+    InstructionAPI::Instruction::Ptr origInsnPtr = d2.decode();
+
+    StackAccess* origAccess;
+    signed long origDisp;
+    if (!getMemoryOffset(NULL, NULL, origInsnPtr, addr, MachRegister(), StackAnalysis::Height(0), origAccess, arch)) {
+        assert(0);
+    } else {
+        origDisp = origAccess->disp();
+        relocation_cerr << "\t\tOld displacement: " << std::hex << 
+            origDisp << " New: " << newDisp << std::dec << std::endl;
+    }
+
+    GET_PTR(newInsn, gen);
+
+    const unsigned char* newInsnStart = newInsn;
+    const unsigned char* origInsnStart = origInsn;
+
+    /******************************************* prefix/opcode ****************/
+   
+    ia32_instruction instruct; 
+    /**
+     * This information is generated during ia32_decode. To make this faster
+     * We are only going to do the prefix and opcode decodings
+     */
+    if(!ia32_decode_prefixes(origInsn, instruct))
+        assert(!"Couldn't decode prefix of already known instruction!\n");
+
+    /* get the prefix count */
+    size_t pref_count = instruct.getSize();
+
+    /* copy the prefix */
+    memcpy(newInsn, origInsn, pref_count);
+    newInsn += pref_count;
+    origInsn += pref_count;
+
+    /* Decode the opcode */
+    if(ia32_decode_opcode(0, origInsn, instruct, NULL) < 0)
+        assert(!"Couldn't decode opcode of already known instruction!\n");
+
+    /* Calculate the amount of opcode bytes */
+    size_t opcode_len = instruct.getSize() - pref_count;
+
+    /* Copy the opcode bytes */
+    memcpy(newInsn, origInsn, opcode_len);
+    newInsn += opcode_len;
+    origInsn += opcode_len;
+
+    /* Update the new instruction size */
+    newInsnSz = pref_count + opcode_len;
+
+    /******************************************* modRM *************************/
+    // Update displacement size (mod bits in ModRM), if necessary
+    int expectedDifference = 0;
+    unsigned char modrm = *origInsn++;
+    unsigned char modrm_mod = MODRM_MOD(modrm);
+    unsigned char modrm_rm = MODRM_RM(modrm);
+
+    relocation_cerr << "\t\tModRM: " << std:: hex <<
+        (unsigned int)modrm << " mod: " << (unsigned int)modrm_mod << 
+        " rm: " << (unsigned int)modrm_rm
+        << std::endl;
+
+    int origDispSize = -1;
+
+    if (origDisp != newDisp) {
+        if (modrm_mod == 0) {
+            if (modrm_rm == 5) {
+                origDispSize = 32;
+            } else {
+                origDispSize = -1;
+            }
+        } else if (modrm_mod == 1) {
+            origDispSize = 8;
+        } else if (modrm_mod == 2) {
+            origDispSize = 32;
+        } else {
+            origDispSize = -1;
+        }
+
+        // Switch modrm_mod if necessary
+        if (origDispSize == -1) {
+            // If we didn't have a displacement before, and we do now, need to handle it!
+            if (is_disp8(newDisp)) {
+                modrm = modrm + 0x40;
+                expectedDifference = 1;
+            } else if (is_disp32(newDisp)) {
+                modrm = modrm + 0x80;
+                expectedDifference = 4;
+            }
+
+        } else if (origDispSize == 8) {
+            if (is_disp8(newDisp)) {
+            } else if (is_disp32(newDisp)) {
+                modrm = modrm + 0x40;
+                expectedDifference = 3;
+            }
+        } else if (origDispSize == 32) {
+            if (is_disp8(newDisp)) {
+                modrm = modrm - 0x40;
+                expectedDifference = -3;
+            } else if (is_disp32(newDisp)) {
+            }
+        }
+    }
+
+    /******************************************* SIB ***************************/
+
+    // Copy the SIB byte when necessary
+    if (modrm_rm == 4) {
+
+        unsigned char sib = *origInsn++;
+        unsigned char sib_base = MODRM_RM(sib);
+
+        // Check for displacement in the SIB
+        if (sib_base == 5 && modrm_mod == 0) {
+            origDispSize = 32;
+        }
+
+        // Copy MODRM byte
+        *newInsn++ = modrm;
+        newInsnSz++;
+
+        // Copy SIB byte
+        *newInsn++ = sib;
+        newInsnSz++;
+    } else {
+        // Copy MODRM byte
+        *newInsn++ = modrm;
+        newInsnSz++;
+
+        // Skip SIB byte
+    }
+
+    /********************************* displacement ***************************/
+
+    // Put the displacement back in
+    if (origDisp != newDisp) {
+        // Replace displacement
+        if (is_disp8(newDisp)) {
+            *((signed char *)newInsn) = (signed char)(newDisp);
+            newInsn += sizeof(signed char);
+            newInsnSz += sizeof(signed char);
+        } else if (is_disp32(newDisp)) {
+            *((int *)newInsn) = (int)(newDisp);
+            newInsn += sizeof(int);
+            newInsnSz += sizeof(int);
+        } else {
+            // Should never be reached...
+            assert(0);
+        }
+    }
+
+    if (origDispSize == -1) {
+        // Do nothing
+    } else if (origDispSize == 8) {
+        origInsn += sizeof(signed char);
+    } else if (origDispSize == 32) {
+        origInsn += sizeof(int);
+    } else {
+        // Should never be reached
+        assert(0);
+    }
+
+    /********************************* immedidate *****************************/
+
+    // there may be an immediate after the displacement
+    // so we copy over the rest of the instruction here
+    while (origInsn - origInsnStart < (int)insnSz) {
+        unsigned char nextByte = *origInsn++;
+        *newInsn++ = nextByte;
+        newInsnSz++;
+    }
+
+    /******************************** done ************************************/
+
+    InstructionAPI::InstructionDecoder d(newInsnStart, newInsnSz, arch);
+    InstructionAPI::Instruction::Ptr newInsnPtr = d.decode();
+
+    if ((insnSz + expectedDifference) != newInsnSz) {
+        relocation_cerr << "\t\tERROR: Old Size: " << std::dec << insnSz << " New size: " << newInsnSz << " Expected size: " << (insnSz + expectedDifference) << std::endl;
+        return false;
+    }
+
+    // Validate
+    StackAccess* newAccess = NULL;
+    getMemoryOffset(NULL, NULL, newInsnPtr, addr, MachRegister(), StackAnalysis::Height(0), newAccess, arch);
+    if (!newAccess) {
+        if (newDisp != 0) {
+            return false;
+        }
+    } else {
+        if (newAccess->disp() != newDisp){
+            return false;
+        }
+    }
+
+    SET_PTR(newInsn, gen);
+
+    relocation_cerr << "\t\tModify Disp success.\n";
+    return true;
+}

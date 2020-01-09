@@ -425,7 +425,7 @@ namespace Dyninst
       }
       if(operationID == e_push)
       {
-          static BinaryFunction::funcT::Ptr adder(new BinaryFunction::addResult());
+          BinaryFunction::funcT::Ptr adder(new BinaryFunction::addResult());
                     // special case for push: we write at the new value of the SP.
           Result dummy(addrWidth, 0);
           Expression::Ptr push_addr(new BinaryFunction(
@@ -530,6 +530,8 @@ namespace Dyninst
 	doneFlagsSetup = true;
       }
       doneOtherSetup = true;
+#else
+      (void) needFlags; //Silence warnings
 #endif //defined(arch_x86) || defined(arch_x86_64)
     return;
     }

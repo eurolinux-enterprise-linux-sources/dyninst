@@ -2,29 +2,26 @@ Summary: An API for Run-time Code Generation
 License: LGPLv2+
 Name: dyninst
 Group: Development/Libraries
-Release: 2%{?dist}
+Release: 1%{?dist}
 URL: http://www.dyninst.org
-Version: 8.2.0
-Exclusiveos: linux
-#dyninst only knows the following architectures
+Version: 9.3.1
+# Dyninst only has full support for a few architectures.
+# It has some preliminary support for aarch64 and ppc64le,
+# but we're waiting for those to be feature-complete.
 ExclusiveArch: %{ix86} x86_64 ppc ppc64
 
-# The source for this package was pulled from upstream's vcs.  Use the
-# following commands to generate the tarball:
-#  git clone http://git.dyninst.org/dyninst.git; cd dyninst
-#  git archive --format=tar.gz --prefix=dyninst/ v8.2.0.1 > dyninst-8.2.0.1.tar.gz
-#  git clone http://git.dyninst.org/docs.git; cd docs
-#  git archive --format=tar.gz --prefix=docs/ v8.2.0.1 > dyninst-docs-8.2.0.1.tar.gz
-#  git clone http://git.dyninst.org/testsuite.git; cd testsuite
-#  git archive --format=tar.gz --prefix=testsuite/ v8.2.0.1 > dyninst-testsuite-8.2.0.1.tar.gz
-# Verify the commit ids with:
-#  gunzip -c dyninst-8.2.0.1.tar.gz | git get-tar-commit-id
-#  gunzip -c dyninst-docs-8.2.0.1.tar.gz | git get-tar-commit-id
-#  gunzip -c dyninst-testsuite-8.2.0.1.tar.gz | git get-tar-commit-id
-Source0: dyninst-%{version}.1.tar.gz
-Source1: dyninst-docs-%{version}.1.tar.gz
-Source2: dyninst-testsuite-%{version}.1.tar.gz
-Patch1: dyninst-rhbz1152270.patch
+Source0: https://github.com/dyninst/dyninst/archive/v%{version}/dyninst-%{version}.tar.gz
+# Explicit version since it does not match the source version
+Source1: https://github.com/dyninst/testsuite/archive/v9.3.0/testsuite-9.3.0.tar.gz
+
+Patch1: testsuite-9.3.0-junit-nullptr.patch
+Patch2: dyninst-9.3.1-Address.patch
+
+%global dyninst_base dyninst-%{version}
+# Explicit version since it does not match the source version
+%global testsuite_base testsuite-9.3.0
+
+BuildRequires: gcc-c++
 BuildRequires: libdwarf-devel >= 20111030
 BuildRequires: elfutils-libelf-devel
 BuildRequires: boost-devel
@@ -90,102 +87,106 @@ making sure that dyninst works properly.
 %prep
 %setup -q -n %{name}-%{version} -c
 %setup -q -T -D -a 1
-%setup -q -T -D -a 2
 
-pushd dyninst
-%patch1 -p1 -b .rhbz1152270
-popd
+%patch1 -p0 -b.nullptr
+%patch2 -p0 -b.Address
+
+# cotire seems to cause non-deterministic gcc errors
+# https://bugzilla.redhat.com/show_bug.cgi?id=1420551
+sed -i.cotire -e 's/USE_COTIRE true/USE_COTIRE false/' \
+  %{dyninst_base}/cmake/shared.cmake
 
 %build
 
-cd dyninst
+cd %{dyninst_base}
 
 %cmake \
+ -DENABLE_STATIC_LIBS=1 \
  -DINSTALL_LIB_DIR:PATH=%{_libdir}/dyninst \
  -DINSTALL_INCLUDE_DIR:PATH=%{_includedir}/dyninst \
  -DINSTALL_CMAKE_DIR:PATH=%{_libdir}/cmake/Dyninst \
+ -DCMAKE_BUILD_TYPE=None \
  -DCMAKE_SKIP_RPATH:BOOL=YES
-make %{?_smp_mflags}
+%make_build
 
 # Hack to install dyninst nearby, so the testsuite can use it
 make DESTDIR=../install install
-sed -i -e 's!%{_libdir}/dyninst!../install%{_libdir}/dyninst!' \
-  ../install%{_libdir}/cmake/Dyninst/*.cmake
+find ../install -name '*.cmake' -execdir \
+  sed -i -e 's!%{_prefix}!../install&!' '{}' '+'
 
-cd ../testsuite
+cd ../%{testsuite_base}
 %cmake \
- -DDyninst_DIR:PATH=../install%{_libdir}/cmake/Dyninst \
+ -DDyninst_DIR:PATH=$PWD/../install%{_libdir}/cmake/Dyninst \
  -DINSTALL_DIR:PATH=%{_libdir}/dyninst/testsuite \
  -DCMAKE_BUILD_TYPE:STRING=Debug \
  -DCMAKE_SKIP_RPATH:BOOL=YES
-make %{?_smp_mflags}
+%make_build
 
 %install
 
-cd dyninst
-make DESTDIR=%{buildroot} install
+cd %{dyninst_base}
+%make_install
 
-cd ../testsuite
-make DESTDIR=%{buildroot} install
+# It doesn't install docs the way we want, so remove them.
+# We'll just grab the pdfs later, directly from the build dir.
+rm -v %{buildroot}%{_docdir}/*-%{version}.pdf
+
+cd ../%{testsuite_base}
+%make_install
 
 mkdir -p %{buildroot}/etc/ld.so.conf.d
 echo "%{_libdir}/dyninst" > %{buildroot}/etc/ld.so.conf.d/%{name}-%{_arch}.conf
 
-# Ugly hack to fix permissions
-chmod 644 %{buildroot}%{_includedir}/dyninst/*
-chmod 644 %{buildroot}%{_libdir}/dyninst/*.a
-
-# Uglier hack to mask testsuite files from debuginfo extraction.  Running the
+# Ugly hack to mask testsuite files from debuginfo extraction.  Running the
 # testsuite requires debuginfo, so extraction is useless.  However, debuginfo
 # extraction is still nice for the main libraries, so we don't want to disable
 # it package-wide.  The permissions are restored by attr(755,-,-) in files.
-chmod 644 %{buildroot}%{_libdir}/dyninst/testsuite/*
+find %{buildroot}%{_libdir}/dyninst/testsuite/ \
+  -type f '!' -name '*.a' -execdir chmod 644 '{}' '+'
 
 %post -p /sbin/ldconfig
 %postun -p /sbin/ldconfig
 
 %files
-%defattr(-,root,root,-)
-
 %dir %{_libdir}/dyninst
 %{_libdir}/dyninst/*.so.*
 
-%doc dyninst/COPYRIGHT
-%doc dyninst/LGPL
+%doc %{dyninst_base}/COPYRIGHT
+%doc %{dyninst_base}/LGPL
 
 %config(noreplace) /etc/ld.so.conf.d/*
 
 %files doc
-%defattr(-,root,root,-)
-%doc docs/dynC_API.pdf
-%doc docs/DyninstAPI.pdf
-%doc docs/dyninstAPI/examples/
-%doc docs/InstructionAPI.pdf
-%doc docs/ParseAPI.pdf
-%doc docs/PatchAPI.pdf
-%doc docs/ProcControlAPI.pdf
-%doc docs/StackwalkerAPI.pdf
-%doc docs/SymtabAPI.pdf
+%doc %{dyninst_base}/dataflowAPI/doc/dataflowAPI.pdf
+%doc %{dyninst_base}/dynC_API/doc/dynC_API.pdf
+%doc %{dyninst_base}/dyninstAPI/doc/dyninstAPI.pdf
+%doc %{dyninst_base}/instructionAPI/doc/instructionAPI.pdf
+%doc %{dyninst_base}/parseAPI/doc/parseAPI.pdf
+%doc %{dyninst_base}/patchAPI/doc/patchAPI.pdf
+%doc %{dyninst_base}/proccontrol/doc/proccontrol.pdf
+%doc %{dyninst_base}/stackwalk/doc/stackwalk.pdf
+%doc %{dyninst_base}/symtabAPI/doc/symtabAPI.pdf
 
 %files devel
-%defattr(-,root,root,-)
 %{_includedir}/dyninst
 %{_libdir}/dyninst/*.so
 %dir %{_libdir}/cmake
 %{_libdir}/cmake/Dyninst
 
 %files static
-%defattr(-,root,root,-)
 %{_libdir}/dyninst/*.a
 
 %files testsuite
-%defattr(-,root,root,-)
-#%{_bindir}/parseThat
+%{_bindir}/parseThat
 %dir %{_libdir}/dyninst/testsuite/
 # Restore the permissions that were hacked out above, during install.
-%attr(755,root,root) %{_libdir}/dyninst/testsuite/*
+%attr(755,root,root) %{_libdir}/dyninst/testsuite/*[!a]
+%attr(644,root,root) %{_libdir}/dyninst/testsuite/*.a
 
 %changelog
+* Mon Mar 06 2017 Stan Cox <scox@redhat.com> - 9.3.1-1
+- Update to 9.3.1
+
 * Mon Oct 20 2014 Josh Stone <jistone@redhat.com> - 8.2.0-2
 - rhbz1152270: enable bug workaround for syscall pc rewind on ppc
 

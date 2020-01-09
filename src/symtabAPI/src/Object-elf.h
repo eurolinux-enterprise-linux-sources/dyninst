@@ -40,26 +40,20 @@
 #if defined(cap_dwarf)
 //#include "dwarf.h"
 #include "libdwarf.h"
-#include "dwarf/h/dwarfHandle.h"
+#include "dwarfHandle.h"
 #endif
 
-#include<vector>
-#include "common/src/headers.h"
-#include "common/src/Types.h"
-#include "common/src/MappedFile.h"
-#include "common/src/IntervalTree.h"
-
-#if 0
-#include "symtabAPI/h/Symbol.h"
-#include "symtabAPI/h/Symtab.h"
-#endif
-
+#include <vector>
+#include "headers.h"
+#include "Types.h"
+#include "MappedFile.h"
+#include "IntervalTree.h"
 
 #include <elf.h>
 #include <libelf.h>
 #include <string>
 
-#include "elf/h/Elf_X.h"
+#include "Elf_X.h"
 
 #include <fcntl.h>
 #include <stdlib.h>
@@ -146,48 +140,36 @@ class stab_entry_32 : public stab_entry {
 
     const char *name(int i = 0) { 
        if (!stabptr) {
-          fprintf(stderr, "%s[%d]:  warning, accessing uninitialized stab_entry\n",
-                FILE__, __LINE__);
           return "bad_name";
        }
        return stabstr + ((stab32 *)stabptr)[i].name; 
     }
     unsigned long nameIdx(int i = 0) {
        if (!stabptr) {
-          fprintf(stderr, "%s[%d]:  warning, accessing uninitialized stab_entry\n",
-                FILE__, __LINE__);
           return 0L;
        }
        return ((stab32 *)stabptr)[i].name; 
     }
     unsigned char type(int i = 0) {
        if (!stabptr) {
-          fprintf(stderr, "%s[%d]:  warning, accessing uninitialized stab_entry\n",
-                FILE__, __LINE__);
           return 0;
        }
        return ((stab32 *)stabptr)[i].type; 
     }
     unsigned char other(int i = 0) {
        if (!stabptr) {
-          fprintf(stderr, "%s[%d]:  warning, accessing uninitialized stab_entry\n",
-                FILE__, __LINE__);
           return 0;
        }
        return ((stab32 *)stabptr)[i].other; 
     }
     unsigned short desc(int i = 0) { 
        if (!stabptr) {
-          fprintf(stderr, "%s[%d]:  warning, accessing uninitialized stab_entry\n",
-                FILE__, __LINE__);
           return 0;
        }
        return ((stab32 *)stabptr)[i].desc; 
     }
     unsigned long val(int i = 0) { 
        if (!stabptr) {
-          fprintf(stderr, "%s[%d]:  warning, accessing uninitialized stab_entry\n",
-                FILE__, __LINE__);
           return 0L;
        }
        return ((stab32 *)stabptr)[i].val; 
@@ -202,48 +184,36 @@ class stab_entry_64 : public stab_entry {
 
     const char *name(int i = 0) { 
        if (!stabptr) {
-          fprintf(stderr, "%s[%d]:  warning, accessing uninitialized stab_entry\n",
-                FILE__, __LINE__);
           return "bad_name";
        }
        return stabstr + ((stab64 *)stabptr)[i].name; 
     }
     unsigned long nameIdx(int i = 0) {
        if (!stabptr) {
-          fprintf(stderr, "%s[%d]:  warning, accessing uninitialized stab_entry\n",
-                FILE__, __LINE__);
           return 0L;
        }
        return ((stab64 *)stabptr)[i].name; 
     }
     unsigned char type(int i = 0) {
        if (!stabptr) {
-          fprintf(stderr, "%s[%d]:  warning, accessing uninitialized stab_entry\n",
-                FILE__, __LINE__);
           return 0;
        }
        return ((stab64 *)stabptr)[i].type; 
     }
     unsigned char other(int i = 0) { 
        if (!stabptr) {
-          fprintf(stderr, "%s[%d]:  warning, accessing uninitialized stab_entry\n",
-                FILE__, __LINE__);
           return 0;
        }
        return ((stab64 *)stabptr)[i].other; 
     }
     unsigned short desc(int i = 0) { 
        if (!stabptr) {
-          fprintf(stderr, "%s[%d]:  warning, accessing uninitialized stab_entry\n",
-                FILE__, __LINE__);
           return 0;
        }
        return ((stab64 *)stabptr)[i].desc; 
     }
     unsigned long val(int i = 0) { 
        if (!stabptr) {
-          fprintf(stderr, "%s[%d]:  warning, accessing uninitialized stab_entry\n",
-                FILE__, __LINE__);
           return 0L;
        }
        return ((stab64 *)stabptr)[i].val; 
@@ -287,26 +257,23 @@ class stab_entry_64 : public stab_entry {
 // end of stab declarations
 
 class pdElfShdr;
-
 class Symtab;
 class Region;
 class Object;
-class emitElf;
-class emitElf64;
 
-class Object : public AObject {
-  friend class emitElf;
-  friend class emitElf64;
+        class Object : public AObject {
+            friend class Module;
 
   // declared but not implemented; no copying allowed
   Object(const Object &);
   const Object& operator=(const Object &);
 
  public:
-  Object(MappedFile *, bool, void (*)(const char *) = log_msg, bool alloc_syms = true);
+
+  Object(MappedFile *, bool, void (*)(const char *) = log_msg, bool alloc_syms = true, Symtab* st = NULL);
   virtual ~Object();
 
-  bool emitDriver(Symtab *obj, std::string fName, std::vector<Symbol *>&allSymbols, unsigned flag);  
+  bool emitDriver(std::string fName, std::vector<Symbol *> &allSymbols, unsigned flag);
   
   const char *elf_vaddr_to_ptr(Offset vaddr) const;
   bool hasStabInfo() const { return ! ( !stab_off_ || !stab_size_ || !stabstr_off_ ); }
@@ -314,8 +281,9 @@ class Object : public AObject {
   stab_entry * get_stab_info() const;
   std::string getFileName() const;
   void getModuleLanguageInfo(dyn_hash_map<std::string, supportedLanguages> *mod_langs);
-  void parseFileLineInfo(Symtab *obj, dyn_hash_map<std::string, LineInformation> &li);
-  void parseTypeInfo(Symtab *obj);
+  void parseFileLineInfo();
+  
+  void parseTypeInfo();
 
   bool needs_function_binding() const { return (plt_addr_ > 0); } 
   bool get_func_binding_table(std::vector<relocationEntry> &fbt) const;
@@ -363,7 +331,6 @@ class Object : public AObject {
 	//to determine if a mutation falls in the text section of
 	// a shared library
 	bool isinText(Offset addr, Offset baseaddr) const { 
-		//printf(" baseaddr %x TESTING %x %x \n", baseaddr, text_addr_ + baseaddr  , text_addr_ + baseaddr + text_size_ );
 		if(addr > text_addr_ + baseaddr     &&
 		   addr < text_addr_ + baseaddr + text_size_ ) {
 			return true;
@@ -382,8 +349,9 @@ class Object : public AObject {
 	    return false;
 	}
 
-   Dyninst::Architecture getArch();
-
+   Dyninst::Architecture getArch() const;
+   bool isBigEndianDataEncoding() const;
+   bool getABIVersion(int &major, int &minor) const;
 	bool is_offset_in_plt(Offset offset) const;
     Elf_X_Shdr *getRegionHdrByAddr(Offset addr);
     int getRegionHdrIndexByAddr(Offset addr);
@@ -438,7 +406,8 @@ class Object : public AObject {
 
     SYMTAB_EXPORT virtual void getSegmentsSymReader(std::vector<SymSegment> &segs); 
 
-  private:
+    private:
+    std::vector<std::vector<boost::shared_ptr<void> > > freeList;
   static void log_elferror (void (*)(const char *), const char *);
     
   Elf_X *elfHdr;
@@ -549,11 +518,17 @@ class Object : public AObject {
   Symbol *handle_opd_symbol(Region *opd, Symbol *sym);
   void handle_opd_relocations();
   void parse_opd(Elf_X_Shdr *);
-  void parseStabFileLineInfo(Symtab *, dyn_hash_map<std::string, LineInformation> &li);
-  void parseDwarfFileLineInfo(dyn_hash_map<std::string, LineInformation> &li);
+  void parseStabFileLineInfo();
+ public:
+  void parseDwarfFileLineInfo();
+  void parseLineInfoForAddr(Offset addr_to_find);
+  
+ private:
+            void parseLineInfoForCU(Module::DebugInfoT cuDIE, LineInformation* li);
+            bool dwarf_parse_aranges(Dwarf_Debug dbg, std::set<Dwarf_Off>& dies_seen);
 
   void parseDwarfTypes(Symtab *obj);
-  void parseStabTypes(Symtab *obj);
+  void parseStabTypes();
 
   void load_object(bool);
   void load_shared_object(bool);
@@ -587,7 +562,6 @@ class Object : public AObject {
 
   void find_code_and_data(Elf_X &elf,
        Offset txtaddr, Offset dataddr);
-  //void insert_symbols_static(std::vector<Symbol *> &allsymbols);
   bool fix_global_symbol_modules_static_stab(Elf_X_Shdr *stabscnp,
 					     Elf_X_Shdr *stabstrscnp);
   bool fix_global_symbol_modules_static_dwarf();
@@ -597,11 +571,11 @@ class Object : public AObject {
   bool find_catch_blocks(Elf_X_Shdr *eh_frame, Elf_X_Shdr *except_scn,
                          Address textaddr, Address dataaddr,
                          std::vector<ExceptionBlock> &catch_addrs);
-
+  // Line info: CUs to skip
+  std::set<std::string> modules_parsed_for_line_info;
 #if defined(cap_dwarf)
-  std::string find_symbol(std::string name); 
-  bool fixSymbolsInModule(Dwarf_Debug dbg, std::string & moduleName, Dwarf_Die dieEntry);
-  unsigned fixSymbolsInModuleByRange(IntervalTree<Dwarf_Addr, std::string> &module_ranges);
+  std::string find_symbol(std::string name);
+
 #endif
 
  public:
@@ -623,8 +597,6 @@ class Object : public AObject {
   const char* soname_;
   
 };
-
-//const char *pdelf_get_shnames(Elf *elfp, bool is64);
 
 }//namespace SymtabAPI
 }//namespace Dyninst

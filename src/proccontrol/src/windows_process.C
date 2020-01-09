@@ -34,7 +34,7 @@
 #include "windows_thread.h"
 #include "procpool.h"
 #include "irpc.h"
-#include "proccontrol/h/Mailbox.h"
+#include "Mailbox.h"
 #include <iostream>
 #include <psapi.h>
 #include <winNT.h>
@@ -108,8 +108,11 @@ stopthr_(0)
 
 windows_process::~windows_process()
 {
+	ProcessPool *pp = ProcPool();
 	GeneratorWindows* winGen = static_cast<GeneratorWindows*>(GeneratorWindows::getDefaultGenerator());
+	pp->condvar()->lock();
 	winGen->removeProcess(this);
+	pp->condvar()->unlock();
 	// Do NOT close the process handle; that's handled by ContinueDebugEvent. Closing the file is okay.
 	::CloseHandle(hfile);
 	
@@ -189,6 +192,11 @@ bool windows_process::plat_create_int()
 		windows_thread* wThread = dynamic_cast<windows_thread*>(initialThread);
 		wThread->setHandle(procInfo.hThread);
 	}
+	else
+	{
+		printf("Create process failed (%d) \n", GetLastError());
+	}
+	
 	return result ? true : false;
 }
 bool windows_process::plat_attach(bool, bool &)
@@ -438,17 +446,17 @@ bool windows_process::needIndividualThreadAttach()
 	return false;
 }
 
-bool windows_process::plat_supportLWPCreate() const
+bool windows_process::plat_supportLWPCreate()
 {
 	return true;
 }
 
-bool windows_process::plat_supportLWPPreDestroy() const
+bool windows_process::plat_supportLWPPreDestroy()
 {
 	return true;
 }
 
-bool windows_process::plat_supportLWPPostDestroy() const
+bool windows_process::plat_supportLWPPostDestroy()
 {
 	return false;
 }

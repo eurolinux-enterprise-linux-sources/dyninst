@@ -113,10 +113,11 @@ class InsertedRegion : public CodeRegion {
    };
    PARSER_EXPORT bool isCode(const Address a) const { return isValidAddress(a); };
    PARSER_EXPORT bool isData(const Address) const { return false; };
+   PARSER_EXPORT bool isReadOnly(const Address) const { return false; };
    PARSER_EXPORT Address offset() const { return base_; };
    PARSER_EXPORT Address length() const { return size_; };
    PARSER_EXPORT unsigned int getAddressWidth() const {
-      if (arch_ == Arch_ppc64 || Arch_x86_64) return 8; 
+      if (arch_ == Arch_ppc64 || arch_ == Arch_x86_64 || arch_ == Arch_aarch64) return 8;
       else return 4;
    };
    PARSER_EXPORT Architecture getArch() const { return arch_; };

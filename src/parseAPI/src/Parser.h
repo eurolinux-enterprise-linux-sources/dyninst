@@ -46,6 +46,7 @@
 #include "ParseCallback.h"
 
 #include "ParseData.h"
+#include "common/src/dthread.h"
 
 using namespace std;
 
@@ -62,6 +63,8 @@ class Parser {
    // which are internal Parser data. 
    friend class CFGModifier;
  private:
+    Mutex<false> finalize_lock;
+
     // Owning code object
     CodeObject & _obj;
 
@@ -121,6 +124,8 @@ class Parser {
     // blocks
     Block * findBlockByEntry(CodeRegion * cr, Address entry);
     int findBlocks(CodeRegion * cr, Address addr, set<Block*> & blocks);
+    // returns current blocks without parsing.
+    int findCurrentBlocks(CodeRegion* cr, Address addr, std::set<Block*>& blocks);
     Block * findNextBlock(CodeRegion * cr, Address addr);
 
     void parse();
@@ -148,6 +153,7 @@ class Parser {
  private:
     void parse_vanilla();
     void parse_gap_heuristic(CodeRegion *cr);
+    void probabilistic_gap_parsing(CodeRegion* cr);
     //void parse_sbp();
 
     ParseFrame::Status frame_status(CodeRegion * cr, Address addr);
@@ -212,6 +218,8 @@ class Parser {
     void finalize_funcs(vector<Function *> & funcs);
 
     void invalidateContainingFuncs(Function *, Block *);
+
+    bool getSyscallNumber(Function *, Block *, Address, Architecture, long int &);
 
     friend class CodeObject;
 };

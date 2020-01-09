@@ -115,16 +115,16 @@ CFWidget::CFWidget(InstructionAPI::Instruction::Ptr insn, Address addr)  :
    // I'm working around it here and in Movement-adhoc.C by checking _both_
    // 32- and 64-bit. 
 
-   Architecture fixme = insn_->getArch();
-   if (fixme == Arch_ppc32) fixme = Arch_ppc64;
+   //Architecture fixme = insn_->getArch();
+   //if (fixme == Arch_ppc32) fixme = Arch_ppc64;
 
    Expression::Ptr thePC(new RegisterAST(MachRegister::getPC(insn_->getArch())));
-   Expression::Ptr thePCFixme(new RegisterAST(MachRegister::getPC(fixme)));
+   //Expression::Ptr thePCFixme(new RegisterAST(MachRegister::getPC(fixme)));
 
    Expression::Ptr exp = insn_->getControlFlowTarget();
 
    exp->bind(thePC.get(), Result(u64, addr_));
-   exp->bind(thePCFixme.get(), Result(u64, addr_));
+   //exp->bind(thePCFixme.get(), Result(u64, addr_));
    Result res = exp->eval();
    if (!res.defined) {
       if (!isIndirect_) {
@@ -275,7 +275,9 @@ bool CFWidget::generate(const codeGen &templ,
          // this for the memory emulation effort. Huzzah!
          if (!generateAddressTranslator(buffer, templ, reg, trace))
             return false;
-         if (isCall_) {
+	 // If this is an indirect tail call, we still treat it
+	 // as an indirect call
+         if (isCall_ || trace->block()->llb()->isIndirectTailCallBlock()) {
             if (!generateIndirectCall(buffer, 
                                       reg, 
                                       insn_, 

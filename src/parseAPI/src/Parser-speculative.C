@@ -51,6 +51,8 @@ using namespace Dyninst::ParseAPI;
 
 #if defined(cap_stripped_binaries)
 
+#include "ProbabilisticParser.h"
+
 namespace hd {
     Address calc_end(Function * f) {
         Address ret = f->addr() + 1;
@@ -90,7 +92,7 @@ namespace hd {
             gapEnd = 0;
         }
 
-        //parsing_printf("addr: %lx gs: %lx ge: %lx\n",addr,gapStart,gapEnd);
+        parsing_printf("addr: %lx gs: %lx ge: %lx\n",addr,gapStart,gapEnd);
 
         while(addr >= gapEnd ||
               gapsize <= MIN_GAP_SIZE)
@@ -122,7 +124,55 @@ namespace hd {
 
         return true;
     }
+    bool compute_gap_new(
+        CodeRegion * cr,
+        Address addr,
+        set<Function *,Function::less> const& funcs,
+        set<Function *,Function::less>::const_iterator & beforeGap,
+        Address & gapStart,
+        Address & gapEnd,
+	bool &reset_iterator)
+    {
+        long MIN_GAP_SIZE = 15;    
+        Address lowerBound = cr->offset();
+        Address upperBound = cr->offset() + cr->length();
 
+
+        if (funcs.empty()) {
+	    if (addr >= upperBound) return false;
+	    gapStart = addr + 1;
+	    if (gapStart < lowerBound) gapStart = lowerBound;
+	    gapEnd = upperBound;
+	    reset_iterator = true;
+	    return true;
+	} else if (addr < (*funcs.begin())->addr()) {
+	    gapStart = addr + 1;
+	    if (gapStart < lowerBound) gapStart = lowerBound;
+	    gapEnd = (*funcs.begin())->addr();
+	    reset_iterator = true;
+	    return true;
+	} else {
+	    reset_iterator = false;
+	    set<Function *,Function::less>::const_iterator afterGap(beforeGap);
+	    ++afterGap;
+	    while (true) {
+	        gapStart = calc_end(*beforeGap);
+		if (afterGap == funcs.end() || (*afterGap)->addr() > upperBound)
+		    gapEnd = upperBound;
+		else
+		    gapEnd = (*afterGap)->addr();
+		if (addr >= gapEnd || (long)(gapEnd - gapStart) <= MIN_GAP_SIZE) {
+		    if (afterGap == funcs.end()) return false;
+		    beforeGap = afterGap;
+		    ++afterGap;
+		} else {
+		    if (gapStart < addr + 1) gapStart = addr + 1;
+		    break;
+		}
+	    }
+	    return true;
+	}
+    }
     bool gap_heuristic_GCC(CodeObject *co,CodeRegion *cr,Address addr)
     {
         using namespace Dyninst::InstructionAPI;
@@ -169,16 +219,34 @@ namespace hd {
         }
     }
 
-
     bool gap_heuristics(CodeObject *co,CodeRegion *cr,Address addr)
     {
         bool ret = false;
-#if defined(i386_unknown_linux2_0) || defined(x86_64_unknown_linux2_4)
-        ret = gap_heuristic_GCC(co,cr,addr);
-#elif defined(i386_unknown_nt4_0)
+#if defined(arch_x86) || defined(arch_x86_64) || defined(i386_unknown_nt4_0)
+
+  #if defined(os_windows)
         ret = gap_heuristic_MSVS(co,cr,addr);
-#endif
+  #else
+        ret = gap_heuristic_GCC(co,cr,addr);
+  #endif
+#endif  
         return ret;
+    }
+
+    bool IsNop(CodeObject *co, CodeRegion *cr, Address addr) {
+        using namespace Dyninst::InstructionAPI;
+    
+        const unsigned char* bufferBegin = 
+            (const unsigned char*)(cr->getPtrToInstruction(addr));
+        if(!bufferBegin)
+            return false;
+ 
+        InstructionDecoder dec(bufferBegin, 
+            cr->offset() + cr->length() - addr, 
+            cr->getArch());
+	Block * blk = NULL;
+	InstructionAdapter_t ah(dec, addr, co, cr, cr, blk);
+	return ah.isNop();
     }
 };
 
@@ -260,9 +328,61 @@ void Parser::parse_gap_heuristic(CodeRegion * cr)
     finalize();
 }
 
+void Parser::probabilistic_gap_parsing(CodeRegion *cr) {
+    // 0. ensure that we've parsed and finalized all vanilla parsing.
+    // We also locate all the gaps
+    
+    if (_parse_state < COMPLETE)
+        parse();
+    finalize();
+
+    string model_spec;
+    if (obj().cs()->getAddressWidth() == 8) 
+        model_spec = "64-bit";
+    else
+        model_spec = "32-bit";
+
+    // Load the pre-trained idiom model:
+    hd::ProbabilityCalculator pc(cr, obj().cs(), this, model_spec);
+
+    // Calculate and update gaps when we find new FEP
+    Address gapStart = 0;
+    Address gapEnd = 0;
+    Address curAddr = 0;
+
+    bool reset_iterator = sorted_funcs.empty();
+    set<Function *,Function::less>::const_iterator beforeGap = sorted_funcs.begin();
+
+    while(hd::compute_gap_new(cr,curAddr,sorted_funcs,beforeGap,gapStart,gapEnd, reset_iterator)) {
+        parsing_printf("[%s] scanning for FEP in [%lx,%lx)\n",
+            FILE__,gapStart,gapEnd);
+        for(curAddr=gapStart; curAddr < gapEnd; ++curAddr) {
+            if(cr->isCode(curAddr)) {
+	        pc.calcProbByMatchingIdioms(curAddr);
+		if (!pc.isFEP(curAddr)) continue;
+		if (hd::IsNop(&_obj,cr, curAddr)) continue;
+		Block* parsed = _obj.findBlockByEntry(cr, curAddr);
+		if (parsed) continue;
+                parse_at(cr,curAddr,true,GAP);
+
+                if(reset_iterator && !sorted_funcs.empty()) {
+                    beforeGap = sorted_funcs.begin();
+                }
+
+                break;
+            }
+        }
+    }
+
+    // 5. Finalize function boundaries
+    finalize();
+}
+
 #else // cap_stripped binaries
 void Parser::parse_gap_heuristic(CodeRegion*)
 {
 
+}
+void Parser::probabilistic_gap_parsing(CodeRegion *cr) {
 }
 #endif

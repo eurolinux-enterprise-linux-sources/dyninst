@@ -118,6 +118,11 @@ mapped_object::mapped_object(fileDescriptor fileDesc,
 
    // Sets "fileName_"
    set_short_name();
+
+   if (analysisMode_ != BPatch_normalMode && fileName() == "dyninstAPI_RT.dll") {
+       startup_cerr << "Warning, running dyninstAPI_RT.dll in normal mode.\n";
+       analysisMode_ = BPatch_normalMode;
+   }
 }
 
 mapped_object *mapped_object::createMappedObject(Library::const_ptr lib,
@@ -724,27 +729,33 @@ void mapped_object::addFunctionName(func_instance *func,
    }
 
    assert(funcsByName != NULL);
-   funcsByName->push_back(func);
+   if(std::find(funcsByName->begin(),
+		funcsByName->end(),
+		func) == funcsByName->end()) 
+   {
+     funcsByName->push_back(func);
+   }
 }
+
 
 
 void mapped_object::addFunction(func_instance *func) {
     // Possibly multiple demangled (pretty) names...
     // And multiple functions (different addr) with the same pretty
     // name. So we have a many::many mapping...
-    for (unsigned pretty_iter = 0;
-         pretty_iter < func->prettyNameVector().size();
-         pretty_iter++) {
-        string pretty_name = func->prettyNameVector()[pretty_iter];
-        addFunctionName(func, pretty_name.c_str(), allFunctionsByPrettyName);
-    }
-
+  for (auto pretty_iter = func->pretty_names_begin();
+       pretty_iter != func->pretty_names_end();
+       ++pretty_iter)
+  {
+        addFunctionName(func, pretty_iter->c_str(), allFunctionsByPrettyName);
+  }
+  for(auto symtab_iter = func->symtab_names_begin();
+      symtab_iter != func->symtab_names_end();
+      ++symtab_iter)
+  {
+    
     // And multiple symtab names...
-    for (unsigned symtab_iter = 0;
-         symtab_iter < func->symTabNameVector().size();
-         symtab_iter++) {
-        string symtab_name = func->symTabNameVector()[symtab_iter];
-        addFunctionName(func, symtab_name.c_str(), allFunctionsByMangledName);
+        addFunctionName(func, symtab_iter->c_str(), allFunctionsByMangledName);
     }
 
     func->mod()->addFunction(func);
@@ -770,10 +781,11 @@ void mapped_object::addVariable(int_variable *var) {
     // Possibly multiple demangled (pretty) names...
     // And multiple functions (different addr) with the same pretty
     // name. So we have a many::many mapping...
-    for (unsigned pretty_iter = 0;
-         pretty_iter < var->prettyNameVector().size();
+  
+  for (auto pretty_iter = var->pretty_names_begin();
+         pretty_iter != var->pretty_names_end();
          pretty_iter++) {
-        string pretty_name = var->prettyNameVector()[pretty_iter];
+        string pretty_name = *pretty_iter;
         pdvector<int_variable *> *varsByPrettyEntry = NULL;
 
         // Ensure a vector exists
@@ -785,17 +797,22 @@ void mapped_object::addVariable(int_variable *var) {
         else {
            varsByPrettyEntry = iter->second;
         }
-
-
-        (*varsByPrettyEntry).push_back(var);
+	if(std::find(varsByPrettyEntry->begin(),
+		     varsByPrettyEntry->end(),
+		     var) == varsByPrettyEntry->end())
+	{
+	  varsByPrettyEntry->push_back(var);
+	}
+	
     }
 
+    
     // And multiple symtab names...
-    for (unsigned symtab_iter = 0;
-         symtab_iter < var->symTabNameVector().size();
+    for (auto symtab_iter = var->symtab_names_begin();
+         symtab_iter != var->symtab_names_end();
          symtab_iter++) {
-        string symtab_name = var->symTabNameVector()[symtab_iter];
-        pdvector<int_variable *> *varsBySymTabEntry = NULL;
+      string symtab_name = *symtab_iter;
+      pdvector<int_variable *> *varsBySymTabEntry = NULL;
 
         // Ensure a vector exist
         auto iter = allVarsByMangledName.find(symtab_name);
@@ -806,8 +823,12 @@ void mapped_object::addVariable(int_variable *var) {
         else {
            varsBySymTabEntry = iter->second;
         }
-
-        (*varsBySymTabEntry).push_back(var);
+	if(std::find(varsBySymTabEntry->begin(),
+		     varsBySymTabEntry->end(),
+		     var) == varsBySymTabEntry->end())
+	{
+	  varsBySymTabEntry->push_back(var);
+	}
     }
 
     everyUniqueVariable[var->ivar()] = var;
@@ -1207,7 +1228,6 @@ bool mapped_object::parseNewEdges(const std::vector<edgeStub> &stubs)
             // And we don't know what type of edge this is. Lovely. Let's
             // figure it out from the instruction class, since that's
             // the easy way to do things.
-
             block_instance::Insns insns;
             stubs[idx].src->getInsns(insns);
             InstructionAPI::Instruction::Ptr cf = insns[stubs[idx].src->last()];
@@ -1255,6 +1275,7 @@ bool mapped_object::parseNewEdges(const std::vector<edgeStub> &stubs)
 		/* 1. Parse from target address, add new edge at image layer  */
 		CodeObject::NewEdgeToParse newEdge(stubs[idx].src->llb(),
             stubs[idx].trg - targ_obj->codeBase(),
+            stubs[idx].checked, 
             edgeType);
 		if (this != targ_obj) {
 			std::vector<ParseAPI::CodeObject::NewEdgeToParse> newEdges;
@@ -1714,9 +1735,13 @@ bool mapped_object::isExpansionNeeded(Address entry)
 // or if the address is in an uninitialized memory,
 bool mapped_object::updateCodeBytesIfNeeded(Address entry)
 {
-	//cerr << "updateCodeBytes @ " << hex << entry << dec << endl;
 
-	assert( BPatch_defensiveMode == analysisMode_ );
+    // we may want to switch between normal and defensive
+    // instrumentation/parsing for trusted modules. simply return if we're
+    // presently in normal mode.
+    if (analysisMode_ != BPatch_defensiveMode) {
+        return true;
+    }
 
     Address pageAddr = entry -
         (entry % proc()->proc()->getMemoryPageSize());
@@ -1779,8 +1804,8 @@ void mapped_object::remove(func_instance *func) {
     funcs_.erase(func->ifunc());
 
     // remove symtab names
-    for (auto name_iter = func->symTabNameVector().begin();
-         name_iter != func->symTabNameVector().end(); 
+    for (auto name_iter = func->symtab_names_begin();
+         name_iter != func->symtab_names_end(); 
          ++name_iter) {
        auto map_iter = allFunctionsByMangledName.find(*name_iter);
        if (map_iter == allFunctionsByMangledName.end()) continue;
@@ -1800,8 +1825,8 @@ void mapped_object::remove(func_instance *func) {
     }
 
     // remove pretty names
-    for (auto name_iter = func->prettyNameVector().begin();
-         name_iter != func->prettyNameVector().end(); 
+    for (auto name_iter = func->pretty_names_begin();
+         name_iter != func->pretty_names_end(); 
          ++name_iter) {
        auto map_iter = allFunctionsByPrettyName.find(*name_iter);
        if (map_iter == allFunctionsByPrettyName.end()) continue;
@@ -1967,7 +1992,9 @@ void mapped_object::setCodeBytesUpdated(bool newval)
 }
 
 #if !( (defined(os_linux) || defined(os_freebsd)) && \
-       (defined(arch_x86) || defined(arch_x86_64) || defined(arch_power)) )
+       (defined(arch_x86) || defined(arch_x86_64) || defined(arch_power)\
+        ||defined(arch_aarch64)\
+       ) )
 func_instance *mapped_object::findGlobalConstructorFunc(const std::string &) {
     assert(!"Not implemented");
     return NULL;

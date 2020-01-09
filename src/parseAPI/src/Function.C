@@ -37,6 +37,8 @@
 #include "Parser.h"
 #include "debug_parse.h"
 #include "util.h"
+#include "LoopAnalyzer.h"
+#include "dominator.h"
 
 #include "dataflowAPI/h/slicing.h"
 #include "dataflowAPI/h/AbslocInterface.h"
@@ -44,10 +46,13 @@
 #include "common/h/Graph.h"
 #include "StackTamperVisitor.h"
 
+#include "common/src/dthread.h"
+
 using namespace std;
 
 using namespace Dyninst;
 using namespace Dyninst::ParseAPI;
+
 
 Function::Function() :
         _start(0),
@@ -65,7 +70,12 @@ Function::Function() :
         _saves_fp(false),
         _cleans_stack(false),
         _tamper(TAMPER_UNSET),
-        _tamper_addr(0)
+        _tamper_addr(0),
+	_loop_analyzed(false),
+	_loop_root(NULL),
+	isDominatorInfoReady(false),
+	isPostDominatorInfoReady(false)
+
 {
     fprintf(stderr,"PROBABLE ERROR, default ParseAPI::Function constructor\n");
 }
@@ -88,7 +98,13 @@ Function::Function(Address addr, string name, CodeObject * obj,
         _saves_fp(false),
         _cleans_stack(false),
         _tamper(TAMPER_UNSET),
-        _tamper_addr(0)
+        _tamper_addr(0),
+	_loop_analyzed(false),
+	_loop_root(NULL),
+	isDominatorInfoReady(false),
+	isPostDominatorInfoReady(false)
+
+
 {
     if (obj->defensiveMode()) {
         mal_printf("new funct at %lx\n",addr);
@@ -110,11 +126,14 @@ Function::~Function()
     for( ; eit != _extents.end(); ++eit) {
         delete *eit;
     }
+    for (auto lit = _loops.begin(); lit != _loops.end(); ++lit)
+        delete *lit;
 }
 
 Function::blocklist
 Function::blocks()
 {
+
     if(!_cache_valid)
         finalize();
     return blocklist(blocks_begin(), blocks_end());
@@ -158,6 +177,14 @@ Function::exitBlocks() {
   
 }
 
+
+Function::const_blocklist
+Function::exitBlocks() const {
+    assert(_cache_valid);
+    return const_blocklist(exit_begin(), exit_end());
+
+}
+
 vector<FuncExtent *> const&
 Function::extents()
 {
@@ -171,12 +198,13 @@ Function::finalize()
 {
   _extents.clear();
   _exitBL.clear();
+
   // for each block, decrement its refcount
   for (auto blk = blocks_begin(); blk != blocks_end(); blk++) {
     (*blk)->_func_cnt--;
   }
   _bmap.clear();
-  _retBL.clear();
+  _retBL.clear(); 
   _call_edge_list.clear();
 
     // The Parser knows how to finalize
@@ -212,6 +240,40 @@ Function::blocks_int()
         add_block(_entry);
     }
 
+    // We need to revalidate that the exit blocks we found before are still exit blocks
+    blockmap::iterator nextIt, curIt;
+    for (curIt = _exitBL.begin(); curIt != _exitBL.end(); ) {
+        Block *cur = curIt->second;
+	bool exit_func = false;
+        bool found_call = false;
+        bool found_call_ft = false;
+
+	if (cur->targets().empty()) exit_func = true;
+	for (auto eit = cur->targets().begin(); eit != cur->targets().end(); ++eit) {
+	    Edge *e = *eit;
+	    Block *t = e->trg();
+            if(e->type() == CALL || e->interproc()) {
+	        found_call = true;
+	    }
+            if (e->type() == CALL_FT) {
+                found_call_ft = true;
+            }
+
+	    if (e->type() == RET || t->obj() != cur->obj()) {
+	        exit_func = true;
+		break;
+	    }
+	}
+	if (found_call && !found_call_ft && !obj()->defensiveMode()) exit_func = true;
+
+	if (!exit_func) { 
+	    nextIt = curIt;
+	    ++nextIt;
+	    _exitBL.erase(curIt);
+	    curIt = nextIt;
+	} else ++curIt;
+    }
+
     // avoid adding duplicate return blocks
     for(auto bit=exit_begin();
         bit!=exit_end();++bit)
@@ -239,7 +301,8 @@ Function::blocks_int()
             Edge * e = *tit;
             Block * t = e->trg();
 
-            parsing_printf("\t Considering target block 0x%lx from edge %p\n", t->start(), e); 
+            parsing_printf("\t Considering target block [0x%lx,0x%lx) from edge %p\n", 
+			   t->start(), t->end(), e); 
 
             if (e->type() == CALL_FT) {
                found_call_ft = true;
@@ -288,7 +351,7 @@ Function::blocks_int()
             }
 
             if(!HASHDEF(visited,t->start())) {
-               parsing_printf("\t Adding target block to worklist\n");
+               parsing_printf("\t Adding target block [%lx,%lx) to worklist according to edge from %lx, type %d\n", t->start(), t->end(), e->src()->last(), e->type());
                 worklist.push_back(t);
                 visited[t->start()] = true;
                 add_block(t);
@@ -315,6 +378,7 @@ Function::blocks_int()
            }
         }
     }
+
     return blocklist(blocks_begin(), blocks_end());
 }
 
@@ -373,7 +437,7 @@ Function::add_block(Block *b)
 }
 
 const string &
-Function::name() 
+Function::name() const
 {
     return _name;
 }
@@ -381,6 +445,7 @@ Function::name()
 bool
 Function::contains(Block *b)
 {
+    if (b == NULL) return false;
     if(!_cache_valid)
         finalize();
 
@@ -479,7 +544,6 @@ Function::tampersStack(bool recalculate)
         _tamper = TAMPER_NONE;
         return _tamper;
     }
-
     // this is above the cond'n below b/c it finalizes the function, 
     // which could in turn call this function
     Function::const_blocklist retblks(returnBlocks());
@@ -487,18 +551,21 @@ Function::tampersStack(bool recalculate)
         _tamper = TAMPER_NONE;
         return _tamper;
     }
-	_cache_valid = false;
+        // The following line leads to dangling pointers, but leaving
+        // in until we understand why it was originally there.
+	//_cache_valid = false;
 
     // if we want to re-calculate the tamper address
     if (!recalculate && TAMPER_UNSET != _tamper) {
         return _tamper;
     }
-
-    AssignmentConverter converter(true);
+	assert(_cache_valid);
+    AssignmentConverter converter(true, true);
     vector<Assignment::Ptr> assgns;
     ST_Predicates preds;
     _tamper = TAMPER_UNSET;
     for (auto bit = retblks.begin(); retblks.end() != bit; ++bit) {
+		assert(_cache_valid);
         Address retnAddr = (*bit)->lastInsnAddr();
         InstructionDecoder retdec(this->isrc()->getPtrToInstruction(retnAddr), 
                                   InstructionDecoder::maxInstructionLength, 
@@ -530,12 +597,6 @@ Function::tampersStack(bool recalculate)
 
                 Slicer slicer(*ait,*bit,this);
                 Graph::Ptr slGraph = slicer.backwardSlice(preds);
-                if (dyn_debug_malware) {
-                    stringstream graphDump;
-                    graphDump << "sliceDump_" << this->name() << "_" 
-                              << hex << retnAddr << dec << ".dot";
-                    //slGraph->printDOT(graphDump.str());
-                }
                 DataflowAPI::Result_t slRes;
                 DataflowAPI::SymEval::expand(slGraph,slRes);
                 sliceAtRet = slRes[*ait];
@@ -595,4 +656,149 @@ Function::tampersStack(bool recalculate)
 
 void Function::destroy(Function *f) {
    f->obj()->destroy(f);
+}
+
+LoopTreeNode* Function::getLoopTree() const{
+  if (_loop_root == NULL) {
+      LoopAnalyzer la(this);
+      la.createLoopHierarchy();
+  }
+  return _loop_root;
+}
+
+// this methods returns the loop objects that exist in the control flow
+// grap. It returns a set. And if there are no loops, then it returns the empty
+// set. not NULL.
+void Function::getLoopsByNestingLevel(vector<Loop*>& lbb,
+                                              bool outerMostOnly) const
+{
+  if (_loop_analyzed == false) {
+      LoopAnalyzer la(this);
+      la.analyzeLoops();
+      _loop_analyzed = true;
+  }
+
+  for (std::set<Loop *>::iterator iter = _loops.begin();
+       iter != _loops.end(); ++iter) {
+     // if we are only getting the outermost loops
+     if (outerMostOnly && 
+         (*iter)->parentLoop() != NULL) continue;
+
+     lbb.push_back(*iter);
+  }
+  return;
+}
+
+
+// get all the loops in this flow graph
+bool
+Function::getLoops(vector<Loop*>& lbb) const
+{
+  getLoopsByNestingLevel(lbb, false);
+  return true;
+}
+
+// get the outermost loops in this flow graph
+bool
+Function::getOuterLoops(vector<Loop*>& lbb) const
+{
+  getLoopsByNestingLevel(lbb, true);
+  return true;
+}
+
+Loop *Function::findLoop(const char *name) const
+{
+  return getLoopTree()->findLoop(name);
+}
+
+
+//this method fill the dominator information of each basic block
+//looking at the control flow edges. It uses a fixed point calculation
+//to find the immediate dominator of the basic blocks and the set of
+//basic blocks that are immediately dominated by this one.
+//Before calling this method all the dominator information
+//is going to give incorrect results. So first this function must
+//be called to process dominator related fields and methods.
+void Function::fillDominatorInfo() const
+{
+    if (!isDominatorInfoReady) {
+        dominatorCFG domcfg(this);
+	domcfg.calcDominators();
+	isDominatorInfoReady = true;
+    }
+}
+
+void Function::fillPostDominatorInfo() const
+{
+    if (!isPostDominatorInfoReady) {
+        dominatorCFG domcfg(this);
+	domcfg.calcPostDominators();
+	isPostDominatorInfoReady = true;
+    }
+}
+
+bool Function::dominates(Block* A, Block *B) const {
+    if (A == NULL || B == NULL) return false;
+    if (A == B) return true;
+
+    fillDominatorInfo();
+
+    if (!immediateDominates[A]) return false;
+
+    for (auto bit = immediateDominates[A]->begin(); bit != immediateDominates[A]->end(); ++bit)
+        if (dominates(*bit, B)) return true;
+    return false;
+}
+        
+Block* Function::getImmediateDominator(Block *A) const {
+    fillDominatorInfo();
+    return immediateDominator[A];
+}
+
+void Function::getImmediateDominates(Block *A, set<Block*> &imd) const {
+    fillDominatorInfo();
+    if (immediateDominates[A] != NULL)
+        imd.insert(immediateDominates[A]->begin(), immediateDominates[A]->end());
+}
+
+void Function::getAllDominates(Block *A, set<Block*> &d) const {
+    fillDominatorInfo();
+    d.insert(A);
+    if (immediateDominates[A] == NULL) return;
+
+    for (auto bit = immediateDominates[A]->begin(); bit != immediateDominates[A]->end(); ++bit)
+        getAllDominates(*bit, d);
+}
+
+bool Function::postDominates(Block* A, Block *B) const {
+    if (A == NULL || B == NULL) return false;
+    if (A == B) return true;
+
+    fillPostDominatorInfo();
+
+    if (!immediatePostDominates[A]) return false;
+
+    for (auto bit = immediatePostDominates[A]->begin(); bit != immediatePostDominates[A]->end(); ++bit)
+        if (postDominates(*bit, B)) return true;
+    return false;
+}
+        
+Block* Function::getImmediatePostDominator(Block *A) const {
+    fillPostDominatorInfo();
+    return immediatePostDominator[A];
+}
+
+void Function::getImmediatePostDominates(Block *A, set<Block*> &imd) const {
+    fillPostDominatorInfo();
+    if (immediatePostDominates[A] != NULL)
+        imd.insert(immediatePostDominates[A]->begin(), immediatePostDominates[A]->end());
+}
+
+void Function::getAllPostDominates(Block *A, set<Block*> &d) const {
+    fillPostDominatorInfo();
+    d.insert(A);
+    if (immediatePostDominates[A] == NULL) return;
+
+    for (auto bit = immediatePostDominates[A]->begin(); bit != immediatePostDominates[A]->end(); ++bit)
+        getAllPostDominates(*bit, d);
 }

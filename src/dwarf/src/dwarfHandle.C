@@ -1,52 +1,63 @@
 /*
  * See the dyninst/COPYRIGHT file for copyright information.
- * 
+ *
  * We provide the Paradyn Tools (below described as "Paradyn")
  * on an AS IS basis, and do not warrant its validity or performance.
  * We reserve the right to update, modify, or discontinue this
  * software at any time.  We shall have no obligation to supply such
  * updates or modifications or any other form of support to you.
- * 
+ *
  * By your use of Paradyn, you understand and agree that we (or any
  * other person or entity with proprietary rights in Paradyn) are
  * under no obligation to provide either maintenance services,
  * update services, notices of latent defects, or correction of
  * defects for Paradyn.
- * 
+ *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
  * version 2.1 of the License, or (at your option) any later version.
- * 
+ *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * Lesser General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
 #include "libdwarf.h"
-#include "elf/h/Elf_X.h"
-#include "dwarf/h/dwarfHandle.h"
-#include "dwarf/h/dwarfFrameParser.h"
-#include "common/src/debug_common.h"
+#include "Elf_X.h"
+#include "dwarfHandle.h"
+#include "dwarfFrameParser.h"
+#include "debug_common.h"
 #include <cstring>
 
 using namespace Dyninst;
 using namespace Dwarf;
 using namespace std;
 
-void DwarfHandle::defaultDwarfError(Dwarf_Error , Dwarf_Ptr) {
+// Add definitions that may not be in all elf.h files
+#if !defined(EM_K10M)
+#define EM_K10M 180
+#endif
+#if !defined(EM_L10M)
+#define EM_L10M 181
+#endif
+#if !defined(EM_AARCH64)
+#define EM_AARCH64 183
+#endif
 
+void DwarfHandle::defaultDwarfError(Dwarf_Error err, Dwarf_Ptr p) {
+    dwarf_dealloc(*(Dwarf_Debug*)(p), err, DW_DLA_ERROR);
 }
 
 Dwarf_Handler DwarfHandle::defaultErrFunc = DwarfHandle::defaultDwarfError;
 
 DwarfHandle::DwarfHandle(string filename_, Elf_X *file_,
-                         Dwarf_Handler err_func_, Dwarf_Ptr err_data_) :
+                         Dwarf_Handler err_func_) :
    init_dwarf_status(dwarf_status_uninitialized),
    dbg_file_data(NULL),
    file_data(NULL),
@@ -56,7 +67,6 @@ DwarfHandle::DwarfHandle(string filename_, Elf_X *file_,
    file(file_),
    dbg_file(NULL),
    err_func(err_func_),
-   err_data(err_data_),
    filename(filename_)
 {
 
@@ -90,16 +100,16 @@ bool DwarfHandle::init_dbg()
       return false;
    }
 
-   status = dwarf_elf_init(file->e_elfp(), DW_DLC_READ, 
-                           err_func, err_data, &file_data, &err);
+   status = dwarf_elf_init(file->e_elfp(), DW_DLC_READ,
+                           err_func, &file_data, &file_data, &err);
    if (status != DW_DLV_OK) {
       init_dwarf_status = dwarf_status_error;
       return false;
    }
 
    if (dbg_file) {
-      status = dwarf_elf_init(dbg_file->e_elfp(), DW_DLC_READ, 
-                              err_func, err_data, &dbg_file_data, &err);
+      status = dwarf_elf_init(dbg_file->e_elfp(), DW_DLC_READ,
+                              err_func, &dbg_file_data, &dbg_file_data, &err);
       if (status != DW_DLV_OK) {
          init_dwarf_status = dwarf_status_error;
          return false;
@@ -120,13 +130,15 @@ bool DwarfHandle::init_dbg()
       type_data = &file_data;
       frame_data = &file_data;
    }
-   
+
    Dyninst::Architecture arch;
    switch (file->e_machine()) {
       case EM_386:
          arch = Arch_x86;
          break;
       case EM_X86_64:
+      case EM_K10M:
+      case EM_L10M:
          arch = Arch_x86_64;
          break;
       case EM_PPC:
@@ -135,6 +147,12 @@ bool DwarfHandle::init_dbg()
       case EM_PPC64:
          arch = Arch_ppc64;
          break;
+      case EM_ARM:
+	  arch = Arch_aarch32;
+	  break;
+      case EM_AARCH64:
+      		arch = Arch_aarch64;
+         	break;
       default:
          assert(0 && "Unsupported archiecture in ELF file.");
 	 return false;
@@ -186,21 +204,21 @@ Elf_X *DwarfHandle::debugLinkFile()
 
 Dwarf_Debug *DwarfHandle::line_dbg()
 {
-   if (!init_dbg()) 
+   if (!init_dbg())
       return NULL;
    return line_data;
 }
 
 Dwarf_Debug *DwarfHandle::type_dbg()
 {
-   if (!init_dbg()) 
+   if (!init_dbg())
       return NULL;
    return type_data;
 }
 
 Dwarf_Debug *DwarfHandle::frame_dbg()
 {
-   if (!init_dbg()) 
+   if (!init_dbg())
       return NULL;
    return frame_data;
 }
@@ -208,7 +226,7 @@ Dwarf_Debug *DwarfHandle::frame_dbg()
 
 DwarfHandle::~DwarfHandle()
 {
-   if (init_dwarf_status != dwarf_status_ok) 
+   if (init_dwarf_status != dwarf_status_ok)
       return;
 
    Dwarf_Error err;
@@ -219,20 +237,20 @@ DwarfHandle::~DwarfHandle()
 }
 
 map<std::string, DwarfHandle::ptr> DwarfHandle::all_dwarf_handles;
-DwarfHandle::ptr DwarfHandle::createDwarfHandle(string filename_, Elf_X *file_, 
-                                                Dwarf_Handler err_func_, Dwarf_Ptr err_data_)
-{   
+DwarfHandle::ptr DwarfHandle::createDwarfHandle(string filename_, Elf_X *file_,
+                                                Dwarf_Handler err_func_)
+{
    map<string, DwarfHandle::ptr>::iterator i;
    i = all_dwarf_handles.find(filename_);
    if (i != all_dwarf_handles.end()) {
       return i->second;
    }
-   
-   DwarfHandle::ptr ret = DwarfHandle::ptr(new DwarfHandle(filename_, file_, err_func_, err_data_));
+
+   DwarfHandle::ptr ret = DwarfHandle::ptr(new DwarfHandle(filename_, file_, err_func_));
    all_dwarf_handles.insert(make_pair(filename_, ret));
    return ret;
 }
 
-DwarfFrameParserPtr DwarfHandle::frameParser() { 
+DwarfFrameParserPtr DwarfHandle::frameParser() {
    return sw;
 }

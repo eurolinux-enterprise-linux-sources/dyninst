@@ -55,6 +55,10 @@
 #include "hybridAnalysis.h"
 #include "addressSpace.h"
 
+#if defined(cap_stack_mods)
+#include "StackMod/StackModChecker.h"
+#endif
+
 #include "common/src/Types.h"
 
 #include "Point.h"
@@ -90,7 +94,7 @@ BPatch_function::BPatch_function(BPatch_addressSpace *_addSpace,
 	varsAndParamsValid(false)
 {
    _srcType = BPatch_sourceFunction;
-   
+
    localVariables = new BPatch_localVarCollection;
    funcParameters = new BPatch_localVarCollection;
    retType = NULL;
@@ -203,22 +207,22 @@ bool BPatch_function::getNames(std::vector<std::string> &names) {
 }
 
 bool BPatch_function::getDemangledNames(std::vector<std::string> &names) {
-	std::copy(func->prettyNameVector().begin(), 
-			func->prettyNameVector().end(),
-			std::back_inserter(names));
-	return (!func->prettyNameVector().empty());
+  std::copy(func->pretty_names_begin(),
+	    func->pretty_names_end(),
+	    std::back_inserter(names));
+  return func->pretty_names_begin() != func->pretty_names_end();
 }
 bool BPatch_function::getMangledNames(std::vector<std::string> &names) {
-	std::copy(func->symTabNameVector().begin(), 
-			func->symTabNameVector().end(),
-			std::back_inserter(names));
-	return (!func->symTabNameVector().empty());
+  std::copy(func->symtab_names_begin(),
+	    func->symtab_names_end(),
+	    std::back_inserter(names));
+  return func->symtab_names_begin() != func->symtab_names_end();
 }
 bool BPatch_function::getTypedNames(std::vector<std::string> &names) {
-	std::copy(func->typedNameVector().begin(), 
-			func->typedNameVector().end(),
-			std::back_inserter(names));
-	return (!func->typedNameVector().empty());
+  std::copy(func->typed_names_begin(),
+	    func->typed_names_end(),
+	    std::back_inserter(names));
+  return func->typed_names_begin() != func->typed_names_end();
 }
 
 
@@ -299,9 +303,8 @@ bool BPatch_function::getNames(BPatch_Vector<const char *> &names)
 {
     assert(func);
     unsigned pre_size = names.size();
-
-    for (unsigned i = 0; i < func->prettyNameVector().size(); i++) {
-        names.push_back(func->prettyNameVector()[i].c_str());
+    for (auto i = func->pretty_names_begin(); i != func->pretty_names_end(); i++) {
+        names.push_back(i->c_str());
     }
 
     return names.size() > pre_size;
@@ -322,8 +325,8 @@ bool BPatch_function::getMangledNames(BPatch_Vector<const char *> &names)
     assert(func);
     unsigned pre_size = names.size();
 
-    for (unsigned i = 0; i < func->symTabNameVector().size(); i++) {
-        names.push_back(func->symTabNameVector()[i].c_str());
+    for (auto i = func->symtab_names_begin(); i != func->symtab_names_end(); i++) {
+        names.push_back(i->c_str());
     }
 
     return names.size() > pre_size;
@@ -368,7 +371,7 @@ bool BPatch_function::parseNewEdge(Dyninst::Address source,
     block_instance *sblock = func->obj()->findBlockByEntry(source);
     assert(sblock);
     vector<edgeStub> stubs;
-    stubs.push_back(edgeStub(sblock, target, ParseAPI::NOEDGE));
+    stubs.push_back(edgeStub(sblock, target, ParseAPI::NOEDGE, true));
     func->obj()->parseNewEdges(stubs);
 
     // Correct missing elements in BPatch-level datastructures
@@ -598,10 +601,6 @@ BPatch_Vector<BPatch_point*> *BPatch_function::findPoint(
     if (func == NULL) return NULL;
 
     if (!mod->isValid()) return NULL;
-
-    // if the function is not instrumentable, we won't find the point
-    if (!isInstrumentable())
-       return NULL;
 
     BPatch_Vector<BPatch_point*> *result = new BPatch_Vector<BPatch_point *>;
     
@@ -926,36 +925,44 @@ char *BPatch_function::getModuleName(char *name, int maxLen) {
 BPatch_variableExpr *BPatch_function::getFunctionRef() 
 {
   Address remoteAddress = (Address)getBaseAddr();
-  char *fname = const_cast<char *>(func->prettyName().c_str());
+  string fname = func->prettyName();
 
   //  Need to figure out the type for this effective function pointer,
   //  of the form <return type> (*)(<arg1 type>, ... , <argn type>)
   
-  //  Note:  getParamsInt allocates the vector
-  assert(retType);
-  char typestr[1024];
-  sprintf(typestr, "%s (*)(", retType->getName());
+  //  Note:  getParams allocates the vector
+  string typestr;
+  if(retType) {
+      typestr += retType->getName();
+  } else {
+      typestr += "void";
+  }
+  typestr += " (*function)(";
   
   BPatch_Vector<BPatch_localVar *> *params = getParams();
   assert(params);
   
   for (unsigned int i = 0; i < params->size(); ++i) {
-     if (i >= (params->size() -1)) {
+        typestr += (*params)[i]->getName();
         //  no comma after last parameter
-        sprintf(typestr, "%s %s", typestr, (*params)[i]->getName());
-     } else 
-        sprintf(typestr, "%s %s,", typestr, (*params)[i]->getName());
+     if (i <= (params->size() - 1)) {
+        typestr +=  ",";
+     }
   }
-  sprintf(typestr, "%s)", typestr);
+  if(params->size()==0) {
+      typestr += "void";
+  }
+  typestr += ")";
   
-  BPatch_type *type = addSpace->image->findType(typestr);
+  BPatch_type *type = addSpace->image->findType(typestr.c_str());
+  // Fallback to general pointer type.
   if (!type) {
-     fprintf(stderr, "%s[%d]:  cannot find type '%s'\n", FILE__, __LINE__, typestr);
+    type = addSpace->image->findType("void *");
+  }
+  if (!type) {
+     fprintf(stderr, "%s[%d]:  cannot find type '%s'\n", FILE__, __LINE__, typestr.c_str());
   }
   assert(type);
-  
-  //  only the vector was newly allocated, not the parameters themselves
-  delete params;
   
   //  In truth it would make more sense for this to be a BPatch_constExpr,
   //  But since we are adding this as part of the DPCL compatibility process
@@ -964,7 +971,7 @@ BPatch_variableExpr *BPatch_function::getFunctionRef()
   AstNodePtr ast(AstNode::operandNode(AstNode::Constant, (void *) remoteAddress));
   
   // the variableExpr owns the ast now.
-  return new BPatch_variableExpr(fname, addSpace, lladdSpace, ast, 
+  return new BPatch_variableExpr(fname.c_str(), addSpace, lladdSpace, ast, 
                                  type, (void *) remoteAddress);
   
 
@@ -1101,4 +1108,13 @@ unsigned int BPatch_function::getFootprint()
     return func->footprint();
 }
 
+bool BPatch_function::addMods(std::set<StackMod*> mods)
+{
+#if defined(cap_stack_mods)
+    StackModChecker checker(this, func);
+    return checker.addModsInternal(mods);
+#else
+    return false;
+#endif
+}
 

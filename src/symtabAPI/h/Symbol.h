@@ -44,6 +44,7 @@
 #include "symutil.h"
 #include "Annotatable.h"
 #include "Serialization.h"
+#include <boost/shared_ptr.hpp>
 
 #ifndef CASE_RETURN_STR
 #define CASE_RETURN_STR(x) case x: return #x
@@ -82,6 +83,34 @@ class SYMTAB_EXPORT Symbol : public Serializable,
          typeCommon *);
 
    public:
+   struct Ptr
+   {
+   Ptr(Symbol* s) : m_this(s)
+     {
+     }
+     ~Ptr() 
+     {
+     }
+     Symbol* get() const
+     {
+       return m_this;
+     }
+     operator Symbol*() const
+     {
+       return m_this;
+     }
+     Symbol* operator->() const
+     {
+       return m_this;
+       
+     }
+     
+     Symbol* m_this;
+     
+   };
+   
+   
+   
 
    enum SymbolType {
       ST_UNKNOWN,
@@ -101,7 +130,8 @@ class SYMTAB_EXPORT Symbol : public Serializable,
       SL_UNKNOWN,
       SL_GLOBAL,
       SL_LOCAL,
-      SL_WEAK
+      SL_WEAK,
+      SL_UNIQUE
    };
 
    static const char *symbolLinkage2Str(SymbolLinkage t);
@@ -148,9 +178,9 @@ class SYMTAB_EXPORT Symbol : public Serializable,
    /***********************************************************
      Name Output Functions
     ***********************************************************/		
-   const std::string&      getMangledName () const;
-   const std::string&	 getPrettyName() const;
-   const std::string&      getTypedName() const;
+   std::string      getMangledName () const;
+   std::string	 getPrettyName() const;
+   std::string      getTypedName() const;
 
    Module *getModule() const { return module_; } 
    Symtab *getSymtab() const;
@@ -162,9 +192,10 @@ class SYMTAB_EXPORT Symbol : public Serializable,
    unsigned getSize() const { return size_; }
    Region *getRegion() const { return region_; }
 
-   bool isInDynSymtab() const { return (type_ != ST_DELETED) && isDynamic_; }
-   bool isInSymtab() const { return (type_ != ST_DELETED) && !isDynamic_; }
+   bool isInDynSymtab() const { return (type_ != ST_DELETED) && isDynamic_ && !isDebug_; }
+   bool isInSymtab() const { return (type_ != ST_DELETED) && !isDynamic_ && !isDebug_; }
    bool isAbsolute() const { return isAbsolute_; }
+   bool isDebug() const { return isDebug_; }
    bool isCommonStorage() const { return isCommonStorage_; }
 
    bool              isFunction()            const;
@@ -199,6 +230,7 @@ class SYMTAB_EXPORT Symbol : public Serializable,
    SymbolTag            tag ()               const;
    bool  setDynamic(bool d) { isDynamic_ = d; return true;}
    bool  setAbsolute(bool a) { isAbsolute_ = a; return true; }
+   bool  setDebug(bool dbg) { isDebug_ = dbg; return true; }
    bool  setCommonStorage(bool cs) { isCommonStorage_ = cs; return true; }
 
    bool  setVersionFileName(std::string &fileName);
@@ -235,12 +267,11 @@ class SYMTAB_EXPORT Symbol : public Serializable,
 
    bool          isDynamic_;
    bool          isAbsolute_;
+   bool          isDebug_;
 
    Aggregate *   aggregate_; // Pointer to Function or Variable container, if appropriate.
 
    std::string mangledName_;
-   std::string prettyName_;
-   std::string typedName_;
 
    SymbolTag     tag_;
    int index_;

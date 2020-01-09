@@ -54,7 +54,7 @@
 #include "Symtab.h"
 
 #include "symtabAPI/h/SymtabReader.h"
-#include "proccontrol/h/PCProcess.h"
+#include "PCProcess.h"
 #include "dyninstAPI_RT/h/dyninstAPI_RT.h"
 #include "stackwalk/h/walker.h"
 #include "stackwalk/h/framestepper.h"
@@ -101,6 +101,7 @@ public:
     ~PCProcess();
 
     static std::string createExecPath(const std::string &file, const std::string &dir);
+    virtual bool getDyninstRTLibName();
 
     bool continueProcess();
     bool stopProcess();
@@ -479,12 +480,8 @@ protected:
     AstNodePtr createUnprotectStackAST(); // architecture-specific
     bool setRTLibInitParams();
     bool instrumentMTFuncs();
-    bool initTrampGuard();
     bool extractBootstrapStruct(DYNINST_bootstrapStruct *bs_record);
     bool iRPCDyninstInit();
-    bool registerThread(PCThread *thread);
-    bool unregisterThread(PCThread *thread);
-    bool initializeRegisterThread();
 
 
     Address getRTEventBreakpointAddr();

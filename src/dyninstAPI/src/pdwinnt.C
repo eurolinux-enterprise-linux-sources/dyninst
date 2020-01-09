@@ -34,6 +34,7 @@
 #include "common/src/headers.h"
 #include "dyninstAPI/src/os.h"
 #include "dyninstAPI/src/addressSpace.h"
+#include "binaryEdit.h"
 #include "common/src/stats.h"
 #include "common/src/Types.h"
 #include "dyninstAPI/src/debug.h"
@@ -58,8 +59,6 @@
 #include "BPatch_process.h"
 #include "nt_signal_emul.h"
 #include "dyninstAPI/src/PCEventMuxer.h"
-
-#define snprintf _snprintf
 
 // prototypes of functions used in this file
 
@@ -141,184 +140,6 @@ bool CALLBACK printMods(PCSTR name, DWORD64 addr, PVOID unused) {
     return true;
 }
 
-// FIXME
-#if 0
-static bool decodeAccessViolation_defensive(EventRecord &ev, bool &wait_until_active)
-{
-    bool ret = false;
-    wait_until_active = true;
-    ev.address = (eventAddress_t) ev.info.u.Exception.ExceptionRecord.ExceptionAddress;
-    Address violationAddr = 
-        ev.info.u.Exception.ExceptionRecord.ExceptionInformation[1];
-    mapped_object *obj = NULL;
-
-    switch(ev.info.u.Exception.ExceptionRecord.ExceptionInformation[0]) {
-    case 0: // bad read
-        if (dyn_debug_malware) {
-            Address origAddr = ev.address;
-            vector<func_instance *> funcs;
-            baseTramp *bt = NULL;
-            ev.proc->getAddrInfo(ev.address, origAddr, funcs, bt);
-            mal_printf("bad read in pdwinnt.C %lx[%lx]=>%lx [%d]\n",
-                       ev.address, origAddr, violationAddr,__LINE__);
-            // detach so we can see what's going on 
-            pdvector<pdvector<Frame> >  stacks;
-            if (!ev.proc->walkStacks(stacks)) {
-                mal_printf("%s[%d]:  walkStacks failed\n", FILE__, __LINE__);
-                return false;
-            }
-            for (unsigned i = 0; i < stacks.size(); ++i) {
-                pdvector<Frame> &stack = stacks[i];
-                for (unsigned int j = 0; j < stack.size(); ++j) {
-                    Address origPC = 0;
-                    vector<func_instance*> dontcare1;
-                    baseTramp *dontcare2 = NULL;
-                    ev.proc->getAddrInfo(stack[j].getPC(), origPC, dontcare1, dontcare2);
-                    mal_printf("frame %d: %lx[%lx]\n", j, stack[j].getPC(), origPC);
-                }
-            }
-            dyn_saved_regs regs;
-            ev.lwp->getRegisters(&regs,false);
-            fprintf(stderr,"REGISTER STATE:\neax=%lx \necx=%lx \nedx=%lx \nebx=%lx \nesp=%lx \nebp=%lx \nesi=%lx "
-                   "\nedi=%lx\n",regs.cont.Eax, regs.cont.Ecx, regs.cont.Edx, 
-                   regs.cont.Ebx, regs.cont.Esp, regs.cont.Ebp, 
-                   regs.cont.Esi, regs.cont.Edi);
-        }
-        break;
-
-    case 1: {// bad write 
-        Address origAddr = ev.address;
-        vector<func_instance *> writefuncs;
-        baseTramp *bt = NULL;
-        bool success = ev.proc->getAddrInfo(ev.address, origAddr, writefuncs, bt);
-        if (dyn_debug_malware) {
-            Address origAddr = ev.address;
-			Address shadowAddr = 0;
-			bool valid = false;
-			boost::tie(valid, shadowAddr) = ev.proc->getMemEm()->translateBackwards(violationAddr);
-
-			cerr << "Overwrite insn @ " << hex << origAddr << dec << endl;
-            vector<func_instance *> writefuncs;
-            baseTramp *bti = NULL;
-            bool success = ev.proc->getAddrInfo(ev.address, origAddr, writefuncs, bti);
-            if (success) {
-                fprintf(stderr,"---%s[%d] overwrite insn at %lx[%lx] in "
-                        "function\"%s\" [%lx], writing to %lx (%lx) \n",
-                        FILE__,__LINE__, ev.address, origAddr,
-						writefuncs.empty() ? "<NO FUNC>" : writefuncs[0]->get_name().c_str(), 
-						writefuncs.empty() ? 0 : writefuncs[0]->addr(), 
-                        violationAddr, shadowAddr);
-            } else { 
-                fprintf(stderr,"---%s[%d] overwrite insn at %lx, not "
-                        "contained in any range, writing to %lx \n",
-                        __FILE__,__LINE__, ev.address, violationAddr);
-            }
-            dyn_saved_regs regs;
-            ev.lwp->getRegisters(&regs,false);
-            fprintf(stderr,"REGISTER STATE:\neax=%lx \necx=%lx \nedx=%lx \nebx=%lx \nesp=%lx \nebp=%lx \nesi=%lx "
-                   "\nedi=%lx\n",regs.cont.Eax, regs.cont.Ecx, regs.cont.Edx, 
-                   regs.cont.Ebx, regs.cont.Esp, regs.cont.Ebp, 
-                   regs.cont.Esi, regs.cont.Edi);
-        }
-
-        // ignore memory access violations originating in kernel32.dll 
-        // (if not originating from an instrumented instruction)
-        mapped_object *obj = ev.proc->findObject(origAddr);
-        assert(obj);
-        if ( BPatch_defensiveMode != obj->hybridMode() ) 
-        {
-            wait_until_active = false;
-            ret = true;
-            ev.type = evtIgnore;
-            PCProcess::PCMemPerm rights(true, true, true);
-            PCProcess::changeMemoryProtections(
-                violationAddr - (violationAddr % ev.proc->getMemoryPageSize()), 
-                ev.proc->getMemoryPageSize(), 
-                rights /* PAGE_EXECUTE_READWRITE */ , 
-                false);
-            break;
-        }
-        // it's a write to a page containing write-protected code if region
-        // permissions don't match the current permissions of the written page
-        obj = ev.proc->findObject(violationAddr);
-        if (!obj && ev.proc->isMemoryEmulated()) {
-            bool valid=false;
-            Address orig=0;
-            boost::tie(valid,orig) = ev.proc->getMemEm()->translateBackwards(violationAddr);
-            if (valid) {
-                violationAddr = orig;
-                obj = ev.proc->findObject(violationAddr);
-            }
-        }
-        if (obj) {
-            using namespace SymtabAPI;
-            Region *reg = obj->parse_img()->getObject()->
-                findEnclosingRegion(violationAddr - obj->codeBase());
-            pdvector<CallbackBase *> callbacks;
-            if (reg && (reg->getRegionPermissions() == Region::RP_RW ||
-                        reg->getRegionPermissions() == Region::RP_RWX  ) &&
-                getCBManager()->dispenseCallbacksMatching
-                    (evtCodeOverwrite, callbacks)) //checks for CBs, doesn't call them
-                {
-                    ev.info2 = reg;
-                    ev.type = evtCodeOverwrite;
-                    ret = true;
-                    wait_until_active = false;
-                }
-            callbacks.clear();
-        }
-        else {
-            fprintf(stderr,"%s[%d] WARNING, possible bug, write insn at "
-                    "%lx wrote to %lx\n",
-                    __FILE__,__LINE__,ev.address, violationAddr);
-            // detach so we can see what's going on 
-            //ev.proc->detachPCProcess(true);
-        }
-        break;
-    }
-    case 8: // no execute permissions
-        fprintf(stderr, "ERROR: executing code that lacks executable "
-                "permissions in pdwinnt.C at %lx, evt.addr=%lx [%d]\n",
-                ev.address, violationAddr,__LINE__);
-        ev.proc->detachPCProcess(true);
-        assert(0);
-        break;
-    default:
-        if (dyn_debug_malware) {
-            Address origAddr = ev.address;
-            vector<func_instance *> funcs;
-            baseTramp *bti = NULL;
-            ev.proc->getAddrInfo(ev.address, origAddr, funcs, bti);
-            mal_printf("weird exception in pdwinnt.C illegal instruction or "
-                       "access violation w/ code (%lx) %lx[%lx]=>%lx [%d]\n",
-                       ev.info.u.Exception.ExceptionRecord.ExceptionInformation[0],
-                       ev.address, origAddr, violationAddr,__LINE__);
-        }
-        ev.proc->detachPCProcess(true);
-        assert(0);
-    }
-    if (evtCodeOverwrite != ev.type && ev.proc->isMemoryEmulated()) {
-        // see if we were executing in defensive code whose memory access 
-        // would have been emulated
-        Address origAddr = ev.address;
-        vector<func_instance *> writefuncs;
-        baseTramp *bti = NULL;
-        bool success = ev.proc->getAddrInfo(ev.address, origAddr, writefuncs, bti);
-        mapped_object *faultObj = NULL;
-        if (success) {
-            faultObj = ev.proc->findObject(origAddr);
-        }
-        if (!faultObj || BPatch_defensiveMode == faultObj->hybridMode()) {
-            // KEVINTODO: we're emulating the instruction, pop saved regs off 
-            // of the stack and into the appropriate registers,
-            // signalHandlerEntry will have to fix up the saved 
-            // context information on the stack 
-            assert(1 || "stack imbalance and bad reg values resulting from incomplete memory emulation of instruction that caused a fault");
-        }
-    }
-    return ret;
-}
-#endif
 
 // already setup on this FD.
 // disconnect from controlling terminal 
@@ -606,25 +427,27 @@ void PCProcess::inferiorMallocConstraints(Address near, Address &lo, Address &hi
    * Cleanup Callee cleans up the stack before returning
  **/
 callType func_instance::getCallingConvention() {
-    const char *name = symTabName().c_str();
+	//std::cerr << "symtab name (c++): " << symTabName() << std::endl;
+    //const char *name = symTabName().c_str();
     const int buffer_size = 1024;
     char buffer[buffer_size];
-    const char *pos;
+    int pos;
 
     if (callingConv != unknown_call)
         return callingConv;
 
-    if (!name) {
+    if (symTabName().empty()) {
+		assert(0);
         //Umm...
         return unknown_call;
     }
-
-    switch(name[0]) {
+    switch(symTabName()[0]) {
         case '?':
             //C++ Encoded symbol. Everything is stored in the C++ name 
             // mangling scheme
-            UnDecorateSymbolName(name, buffer, buffer_size, 
+            UnDecorateSymbolName(symTabName().c_str(), buffer, buffer_size, 
                 UNDNAME_NO_ARGUMENTS | UNDNAME_NO_FUNCTION_RETURNS);
+			printf("undecorated name: %s\n", buffer);
             if (strstr(buffer, "__thiscall")) {
                 callingConv = thiscall_call;
                 return callingConv;
@@ -644,8 +467,8 @@ callType func_instance::getCallingConvention() {
             break;
         case '_':
           //Check for stdcall or cdecl
-          pos = strrchr(name, '@');
-          if (pos) {
+          pos = symTabName().find('@');
+          if (pos != std::string::npos) {
             callingConv = stdcall_call;
             return callingConv;
           }
@@ -656,8 +479,8 @@ callType func_instance::getCallingConvention() {
           break;
         case '@':
           //Should be a fast call
-          pos = strrchr(name, '@');
-          if (pos) {
+          pos = symTabName().find('@');
+          if (pos != std::string::npos) {
              callingConv = fastcall_call;
              return callingConv;
           }
@@ -674,7 +497,7 @@ callType func_instance::getCallingConvention() {
     if (!ifunc()->cleansOwnStack()) {
         callingConv = cdecl_call;
     }
-    else if (strstr(name, "::")) {
+    else if (symTabName().find("::") != std::string::npos) {
         callingConv = thiscall_call;
     }
     else {
@@ -1062,7 +885,7 @@ bool PCProcess::hideDebugger()
     return true;
 }
 
-unsigned long PCProcess::setAOutLoadAddress(fileDescriptor &desc)
+Address PCProcess::setAOutLoadAddress(fileDescriptor &desc)
 {
 	assert(0);
 	return 0;
@@ -1231,7 +1054,34 @@ inferiorHeapType PCProcess::getDynamicHeapType() const
 }
 
 
-void OS::get_sigaction_names(std::vector<std::string> &)
+void OS::get_sigaction_names(std::vector<std::string> &names)
 {
-	assert(0 && "Unimplemented");
+	//names.push_back("signal");
+}
+
+bool PCProcess::getDyninstRTLibName()
+{
+    startup_printf("Begin getDyninstRTLibName\n");
+    bool use_abi_rt = false;
+#if defined(arch_64bit)
+    use_abi_rt = (getAddressWidth() == 4);
+#endif
+
+    std::vector<std::string> rt_paths;
+    std::string rt_base = "dyninstAPI_RT";
+    if(use_abi_rt) rt_base += "_m32";
+    rt_base += ".dll";
+    if(!BinaryEdit::getResolvedLibraryPath(rt_base, rt_paths) || rt_paths.empty())
+    {
+        startup_printf("%s[%d]: Could not find %s in search path\n", FILE__, __LINE__, rt_base.c_str());
+        return false;
+    }
+    for(auto i = rt_paths.begin();
+        i != rt_paths.end();
+        ++i)
+    {
+        startup_printf("%s[%d]: Candidate RTLib is %s\n", FILE__, __LINE__, i->c_str());
+    }
+    dyninstRT_name = rt_paths[0];
+    return true;
 }

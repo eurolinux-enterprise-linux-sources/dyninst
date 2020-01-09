@@ -28,6 +28,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include <assert.h>
 #include "dyninstAPI_RT/src/RTthread.h"
 
 /**
@@ -45,6 +46,10 @@
 int atomic_set(volatile int *val)
 {
    int result;
+#ifdef _WIN64
+   result = _InterlockedCompareExchange(val, 1, 0);
+   return !result;
+#else
    __asm
    {
       mov eax, 0 ;
@@ -54,6 +59,7 @@ int atomic_set(volatile int *val)
       setz al ;
       mov result, eax ;
    }   
+#endif
    return result;
 }
 #else
@@ -79,9 +85,5 @@ int tc_lock_lock(tc_lock_t *tc)
    while (!atomic_set(&tc->mutex));
 
    tc->tid = me;
-   return 0;
-}
-
-unsigned DYNINSTthreadIndexFAST() {
    return 0;
 }

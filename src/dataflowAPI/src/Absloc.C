@@ -42,6 +42,8 @@
 
 #include <sstream>
 
+#include "../../common/src/singleton_object_pool.h"
+
 using namespace Dyninst;
 // using namespace Dyninst::DepGraphAPI;
 using namespace Dyninst::InstructionAPI;
@@ -266,6 +268,24 @@ void AbsRegion::erase(const AbsRegion &rhs) {
 }
 */
 
+Assignment::Ptr Assignment::makeAssignment(const InstructionAPI::Instruction::Ptr i,
+                             const Address a,
+                             ParseAPI::Function *f,
+                             ParseAPI::Block *b,
+                             const std::vector<AbsRegion> &ins,
+                             const AbsRegion &o) {
+      return make_shared(singleton_object_pool<Assignment>::construct(i, a, f, b, ins, o));
+}
+
+Assignment::Ptr Assignment::makeAssignment(const InstructionAPI::Instruction::Ptr i,
+                             const Address a,
+                             ParseAPI::Function *f,
+                             ParseAPI::Block *b,
+                             const AbsRegion &o) {
+      return  make_shared(singleton_object_pool<Assignment>::construct(i, a, f, b, o));
+
+}			     
+
 void Assignment::addInput(const AbsRegion &reg) {
   inputs_.push_back(reg);
 }
@@ -316,20 +336,7 @@ const std::string Assignment::format() const {
   return ret.str();
 }
 
-std::ostream &operator<<(std::ostream &os, const Absloc &a) {
-  os << a.format();
-  return os;
-}
 
-std::ostream &operator<<(std::ostream &os, const AbsRegion &a) {
-  os << a.format();
-  return os;
-}
-
-std::ostream &operator<<(std::ostream &os, const Assignment::Ptr &a) {
-  os << a->format();
-  return os;
-}
 
 #if 0
 bool AbsRegion::equivalent(const AbsRegion &lhs,

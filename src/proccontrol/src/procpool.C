@@ -27,9 +27,9 @@
  * License along with this library; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
-#include "proccontrol/src/procpool.h"
-#include "proccontrol/src/int_process.h"
-#include "proccontrol/h/PCErrors.h"
+#include "procpool.h"
+#include "int_process.h"
+#include "PCErrors.h"
 
 #include <assert.h>
 
@@ -144,6 +144,11 @@ bool ProcessPool::deadThread(Dyninst::LWP lwp) {
 
 void ProcessPool::addDeadThread(Dyninst::LWP lwp) {
    deadThreads.insert(lwp);
+}
+void ProcessPool::removeDeadThread(Dyninst::LWP lwp) {
+    // Called when we get a LWP create, as that had *better*
+    // not be for an alread-dead thread.
+    deadThreads.erase(lwp);
 }
 
 unsigned ProcessPool::numProcs()

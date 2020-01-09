@@ -27,22 +27,22 @@
  * License along with this library; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
-#include "proccontrol/h/Handler.h"
-#include "proccontrol/h/PCErrors.h"
-#include "proccontrol/h/PCProcess.h"
-#include "proccontrol/h/Mailbox.h"
+#include "Handler.h"
+#include "PCErrors.h"
+#include "PCProcess.h"
+#include "Mailbox.h"
 
-#include "proccontrol/src/int_process.h"
-#include "proccontrol/src/int_handler.h"
-#include "proccontrol/src/procpool.h"
-#include "proccontrol/src/irpc.h"
-#include "proccontrol/src/response.h"
-#include "proccontrol/src/int_event.h"
-#include "proccontrol/src/processplat.h"
+#include "int_process.h"
+#include "int_handler.h"
+#include "procpool.h"
+#include "irpc.h"
+#include "response.h"
+#include "int_event.h"
+#include "processplat.h"
 #include "common/h/dyn_regs.h"
 
 #if defined(os_windows)
-#include "proccontrol/src/windows_process.h"
+#include "windows_process.h"
 #endif
 
 #include <iostream>
@@ -52,6 +52,10 @@ using namespace std;
 
 #include <assert.h>
 #include <cstring>
+
+#ifdef _MSC_VER
+#pragma warning(disable:4477)
+#endif
 
 Handler::Handler(std::string name_) :
    name(name_)
@@ -1759,7 +1763,7 @@ Handler::handler_ret_t HandleLibrary::handleEvent(Event::ptr ev)
 		   lib != lev->libsAdded().end();
 		   ++lib)
 	   {
-		   ev->getProcess()->llproc()->memory()->libs.insert((*lib)->debug());
+              ev->getProcess()->llproc()->memory()->addLibrary((*lib)->debug());
 	   }
    }
    if(!lev->libsRemoved().empty())
@@ -1769,7 +1773,7 @@ Handler::handler_ret_t HandleLibrary::handleEvent(Event::ptr ev)
 		   lib != lev->libsRemoved().end();
 		   ++lib)
 	   {
-		   ev->getProcess()->llproc()->memory()->libs.erase((*lib)->debug());
+              ev->getProcess()->llproc()->memory()->rmLibrary((*lib)->debug());
 	   }
    }
    if(!lev->libsAdded().empty() || !lev->libsRemoved().empty())

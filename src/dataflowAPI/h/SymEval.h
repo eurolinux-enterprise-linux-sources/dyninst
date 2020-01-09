@@ -94,6 +94,11 @@ struct Variable {
     ret << ")";
     return ret.str();
   }
+    friend std::ostream& operator<<(std::ostream& stream, const Variable& c)
+    {
+        stream << c.format();
+        return stream;
+    }
 
    AbsRegion reg;
    Address addr;
@@ -122,6 +127,11 @@ struct Constant {
     }
     return ret.str();
   }
+friend std::ostream& operator<<(std::ostream& stream, const Constant& c)
+{
+    stream << c.format();
+    return stream;
+}
   
    uint64_t val;
    size_t size;
@@ -278,6 +288,11 @@ DATAFLOW_EXPORT const std::string format() const {
     ret << ">";
     return ret.str();
 };
+    friend std::ostream& operator<<(std::ostream& stream, const ROSEOperation& c)
+    {
+        stream << c.format();
+        return stream;
+    }
 
 Op op;
 size_t size;
@@ -287,10 +302,6 @@ size_t size;
 
 };
 
-// Get this out of the Dyninst namespace...
-DATAFLOW_EXPORT std::ostream &operator<<(std::ostream &os, const Dyninst::DataflowAPI::ROSEOperation &o);
-DATAFLOW_EXPORT std::ostream &operator<<(std::ostream &os, const Dyninst::DataflowAPI::Constant &o);
-DATAFLOW_EXPORT std::ostream &operator<<(std::ostream &os, const Dyninst::DataflowAPI::Variable &o);
 
 namespace Dyninst {
 
@@ -302,7 +313,8 @@ class SliceNode;
 
 namespace DataflowAPI {
 
-typedef std::map<Assignment::Ptr, AST::Ptr> Result_t;
+// compare assignment shared pointers by value.
+typedef std::map<Assignment::Ptr, AST::Ptr, AssignmentPtrValueComp> Result_t;
     
 DEF_AST_LEAF_TYPE(BottomAST, bool);
 DEF_AST_LEAF_TYPE(ConstantAST, Constant);
@@ -329,7 +341,7 @@ public:
   // static const AST::Ptr Placeholder;
   //
   // Single version: hand in an Assignment, get an AST
-    DATAFLOW_EXPORT static std::pair<AST::Ptr, bool> expand(const Assignment::Ptr &assignment);
+    DATAFLOW_EXPORT static std::pair<AST::Ptr, bool> expand(const Assignment::Ptr &assignment, bool applyVisitors = true);
 
   // Hand in a set of Assignments
   // get back a map of Assignments->ASTs

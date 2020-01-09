@@ -58,6 +58,7 @@ std::map<Architecture, RegisterAST::Ptr> IA_IAPI::framePtr;
 std::map<Architecture, RegisterAST::Ptr> IA_IAPI::stackPtr;
 std::map<Architecture, RegisterAST::Ptr> IA_IAPI::thePC;
 
+
 IA_IAPI::IA_IAPI(const IA_IAPI &rhs) 
    : InstructionAdapter(rhs),
      dec(rhs.dec),
@@ -109,6 +110,7 @@ void IA_IAPI::initASTs()
         framePtr[Arch_x86_64] = RegisterAST::Ptr(new RegisterAST(MachRegister::getFramePointer(Arch_x86_64)));
         framePtr[Arch_ppc32] = RegisterAST::Ptr(new RegisterAST(MachRegister::getFramePointer(Arch_ppc32)));
         framePtr[Arch_ppc64] = RegisterAST::Ptr(new RegisterAST(MachRegister::getFramePointer(Arch_ppc64)));
+        framePtr[Arch_aarch64] = RegisterAST::Ptr(new RegisterAST(MachRegister::getFramePointer(Arch_aarch64)));
     }
     if(stackPtr.empty())
     {
@@ -116,6 +118,7 @@ void IA_IAPI::initASTs()
         stackPtr[Arch_x86_64] = RegisterAST::Ptr(new RegisterAST(MachRegister::getStackPointer(Arch_x86_64)));
         stackPtr[Arch_ppc32] = RegisterAST::Ptr(new RegisterAST(MachRegister::getStackPointer(Arch_ppc32)));
         stackPtr[Arch_ppc64] = RegisterAST::Ptr(new RegisterAST(MachRegister::getStackPointer(Arch_ppc64)));
+        stackPtr[Arch_aarch64] = RegisterAST::Ptr(new RegisterAST(MachRegister::getStackPointer(Arch_aarch64)));
     }
     if(thePC.empty())
     {
@@ -123,6 +126,7 @@ void IA_IAPI::initASTs()
         thePC[Arch_x86_64] = RegisterAST::Ptr(new RegisterAST(MachRegister::getPC(Arch_x86_64)));
         thePC[Arch_ppc32] = RegisterAST::Ptr(new RegisterAST(MachRegister::getPC(Arch_ppc32)));
         thePC[Arch_ppc64] = RegisterAST::Ptr(new RegisterAST(MachRegister::getPC(Arch_ppc64)));
+        thePC[Arch_aarch64] = RegisterAST::Ptr(new RegisterAST(MachRegister::getPC(Arch_aarch64)));
     }
 }
 
@@ -276,6 +280,10 @@ bool IA_IAPI::hasCFT() const
      }
   }
   else if(c == c_SysEnterInsn) 
+  {
+    hascftstatus.second = true;
+  }
+  else if (c == c_SyscallInsn)
   {
     hascftstatus.second = true;
   }
@@ -459,8 +467,8 @@ bool IA_IAPI::isSyscall() const
     Instruction::Ptr ci = curInsn();
 
     return (((ci->getOperation().getID() == e_call) &&
-            /*(curInsn()->getOperation().isRead(gs))) ||*/
-            (ci->getOperand(0).format(ci->getArch()) == "16")) ||
+                (curInsn()->getOperation().isRead(gs)) &&
+                (ci->getOperand(0).format(ci->getArch()) == "16")) ||
             (ci->getOperation().getID() == e_syscall) || 
             (ci->getOperation().getID() == e_int) || 
             (ci->getOperation().getID() == power_op_sc));
@@ -478,6 +486,26 @@ bool IA_IAPI::isSysEnter() const
 {
   Instruction::Ptr ci = curInsn();
   return (ci->getOperation().getID() == e_sysenter);
+}
+
+bool IA_IAPI::isIndirectJump() const {
+    Instruction::Ptr ci = curInsn();
+    if(ci->getCategory() != c_BranchInsn) return false;
+    if(ci->allowsFallThrough()) return false;
+    bool valid;
+    Address target;
+    boost::tie(valid, target) = getCFT(); 
+    if (valid) return false;
+    parsing_printf("... indirect jump at 0x%x, delay parsing it\n", current);
+    return true;
+}
+
+void IA_IAPI::parseSyscall(std::vector<std::pair<Address, EdgeTypeEnum> >& outEdges) const
+{
+    parsing_printf("[%s:%d] Treating syscall as call to sink w/ possible FT edge to next insn at 0x%lx\n",
+		   FILE__, __LINE__, getAddr());
+    outEdges.push_back(std::make_pair((Address)-1,CALL));
+    outEdges.push_back(std::make_pair(getNextAddr(), CALL_FT));
 }
 
 void IA_IAPI::parseSysEnter(std::vector<std::pair<Address, EdgeTypeEnum> >& outEdges) const
@@ -498,18 +526,19 @@ void IA_IAPI::parseSysEnter(std::vector<std::pair<Address, EdgeTypeEnum> >& outE
   else
   {
     parsing_printf("[%s:%d] Treating sysenter as call to kernel w/normal return to next insn at 0x%lx\n",
-		   FILE__, __LINE__, getAddr());
+                  FILE__, __LINE__, getAddr());
     outEdges.push_back(std::make_pair(getNextAddr(), CALL_FT));
   }
 }
 
-
+bool DEBUGGABLE(void) { return true; }
 
 void IA_IAPI::getNewEdges(std::vector<std::pair< Address, EdgeTypeEnum> >& outEdges,
 			  Function* context,
 			  Block* currBlk,
 			  unsigned int num_insns,
-			  dyn_hash_map<Address, std::string> *plt_entries) const
+			  dyn_hash_map<Address, std::string> *plt_entries,
+			  const set<Address>& knownTargets) const
 {
     Instruction::Ptr ci = curInsn();
 
@@ -549,7 +578,7 @@ void IA_IAPI::getNewEdges(std::vector<std::pair< Address, EdgeTypeEnum> >& outEd
         }
  
         if (callEdge)
-            outEdges.push_back(std::make_pair(target, NOEDGE));
+            outEdges.push_back(std::make_pair(target, CALL));
         if (ftEdge)
             outEdges.push_back(std::make_pair(getAddr() + getSize(), CALL_FT));
         return;
@@ -563,19 +592,35 @@ void IA_IAPI::getNewEdges(std::vector<std::pair< Address, EdgeTypeEnum> >& outEd
             outEdges.push_back(std::make_pair(getNextAddr(), COND_NOT_TAKEN));
             return;
         }
+
+        // Catch blocks can appear after either direct jumps or indirect jumps
+	// There may be nops between this jump and the catch block and
+	// there is possibility that the exception table entry points a nop.
+	// Therefore, we need to check for every nop and first non-nop instruction after the jump for catch blocks
+        IA_IAPI tmp_ah(*this);
+	tmp_ah.advance();
+	Address catchStart;
+	bool found = false;
+	while (tmp_ah.curInsn() && tmp_ah.isNop()) {
+	    if(_cr->findCatchBlock(tmp_ah.getAddr(),catchStart))  {
+	        found = true;
+		break;
+	    }
+	    tmp_ah.advance();
+	}
+	if(found || (tmp_ah.curInsn() &&_cr->findCatchBlock(tmp_ah.getAddr(),catchStart)))
+	{
+	    outEdges.push_back(std::make_pair(catchStart, CATCH));
+	}
+
         bool valid;
         Address target;
         boost::tie(valid, target) = getCFT(); 
         // Direct jump
         if (valid) 
         {
-            Address catchStart;
-            if(_cr->findCatchBlock(getNextAddr(),catchStart))
-            {
-                outEdges.push_back(std::make_pair(catchStart, CATCH));
-            }
 
-            if(!isTailCall(context, DIRECT, num_insns))
+            if(!isTailCall(context, DIRECT, num_insns, knownTargets))
             {
                 if(plt_entries->find(target) == plt_entries->end())
                 {
@@ -586,7 +631,7 @@ void IA_IAPI::getNewEdges(std::vector<std::pair< Address, EdgeTypeEnum> >& outEd
                     parsing_printf("%s[%d]: PLT tail call to %x (%s)\n", 
                         FILE__, __LINE__, target,
                         (*plt_entries)[target].c_str());
-                    outEdges.push_back(std::make_pair(target, NOEDGE));
+                    outEdges.push_back(std::make_pair(target, DIRECT));
                     tailCalls[DIRECT] = true;
                 }
             }
@@ -623,7 +668,7 @@ void IA_IAPI::getNewEdges(std::vector<std::pair< Address, EdgeTypeEnum> >& outEd
                 return;
 	      }
             }
-            if(isTailCall(context, INDIRECT, num_insns)) {
+            if(isTailCall(context, INDIRECT, num_insns, knownTargets)) {
                 parsing_printf("%s[%d]: indirect tail call %s at 0x%lx\n", FILE__, __LINE__,
                                ci->format().c_str(), current);
                 outEdges.push_back(std::make_pair((Address)-1,INDIRECT));
@@ -633,7 +678,7 @@ void IA_IAPI::getNewEdges(std::vector<std::pair< Address, EdgeTypeEnum> >& outEd
             parsing_printf("%s[%d]: jump table candidate %s at 0x%lx\n", FILE__, __LINE__,
                            ci->format().c_str(), current);
             parsedJumpTable = true;
-            successfullyParsedJumpTable = parseJumpTable(currBlk, outEdges);
+            successfullyParsedJumpTable = parseJumpTable(context, currBlk, outEdges);
 	    parsing_printf("Parsed jump table\n");
             if(!successfullyParsedJumpTable || outEdges.empty()) {
                 outEdges.push_back(std::make_pair((Address)-1,INDIRECT));
@@ -656,7 +701,7 @@ void IA_IAPI::getNewEdges(std::vector<std::pair< Address, EdgeTypeEnum> >& outEd
             parsedJumpTable = true;
             parsing_printf("%s[%d]: BLR jump table candidate %s at 0x%lx\n", FILE__, __LINE__,
                            ci->format().c_str(), current);
-            successfullyParsedJumpTable = parseJumpTable(currBlk, outEdges);
+            successfullyParsedJumpTable = parseJumpTable(context, currBlk, outEdges);
 	    parsing_printf("Parsed BLR jump table\n");
             if(!successfullyParsedJumpTable || outEdges.empty()) {
             	parsing_printf("%s[%d]: BLR unparsed jump table %s at 0x%lx in function %s UNINSTRUMENTABLE\n", 
@@ -664,6 +709,28 @@ void IA_IAPI::getNewEdges(std::vector<std::pair< Address, EdgeTypeEnum> >& outEd
                 outEdges.push_back(std::make_pair((Address)-1,INDIRECT));
             }
 	}
+	
+	// Check potential catch blocks after return instructions
+	// There may be nops between this return instruction and the catch block and
+	// there is possibility that the exception table entry points a nop.
+	// Therefore, we need to check for every nop and first non-nop instruction after the return for catch blocks
+
+        IA_IAPI tmp_ah(*this);
+	tmp_ah.advance();
+	Address catchStart;
+	bool found = false;
+	while (tmp_ah.curInsn() && tmp_ah.isNop()) {
+	    if(_cr->findCatchBlock(tmp_ah.getAddr(),catchStart))  {
+	        found = true;
+		break;
+	    }
+	    tmp_ah.advance();
+	}
+	if(found || (tmp_ah.curInsn() &&_cr->findCatchBlock(tmp_ah.getAddr(),catchStart)))
+	{
+	    outEdges.push_back(std::make_pair(catchStart, CATCH));
+	}
+
 	parsing_printf("Returning from parse out edges\n");
 	return;
     }
@@ -671,6 +738,9 @@ void IA_IAPI::getNewEdges(std::vector<std::pair< Address, EdgeTypeEnum> >& outEd
     {
       parseSysEnter(outEdges);
       return;
+    } else if (DEBUGGABLE() && isSyscall()) {
+        parseSyscall(outEdges);
+        return;
     }
     
     fprintf(stderr, "Unhandled instruction %s\n", ci->format().c_str());
@@ -878,17 +948,18 @@ bool IA_IAPI::isRelocatable(InstrumentableLevel lvl) const
     return true;
 }
 
-bool IA_IAPI::parseJumpTable(Dyninst::ParseAPI::Block* currBlk,
-                    std::vector<std::pair< Address, Dyninst::ParseAPI::EdgeTypeEnum > >& outEdges) const
+bool IA_IAPI::parseJumpTable(Dyninst::ParseAPI::Function * currFunc,
+			     Dyninst::ParseAPI::Block* currBlk,
+			     std::vector<std::pair< Address, Dyninst::ParseAPI::EdgeTypeEnum > >& outEdges) const
 {
-    IA_platformDetails* jumpTableParser = makePlatformDetails(_isrc->getArch(), this);
-    bool ret = jumpTableParser->parseJumpTable(currBlk, outEdges);
-    parsing_printf("Jump table parser returned %d, %d edges\n", ret, outEdges.size());
-    // Update statistics 
-    currBlk->obj()->cs()->incrementCounter(PARSE_JUMPTABLE_COUNT);
-    if (!ret) currBlk->obj()->cs()->incrementCounter(PARSE_JUMPTABLE_FAIL);
 
+    // Call platform specific jump table parser
+    _obj->cs()->startTimer(PARSE_JUMPTABLE_TIME);
+    IA_platformDetails* jumpTableParser = makePlatformDetails(_isrc->getArch(), this);
+    bool ret = jumpTableParser->parseJumpTable(currFunc, currBlk, outEdges);    
     delete jumpTableParser;
+    _obj->cs()->stopTimer(PARSE_JUMPTABLE_TIME);
+
     return ret;
 }
 

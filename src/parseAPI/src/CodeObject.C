@@ -35,6 +35,8 @@
 #include "Parser.h"
 #include "debug_parse.h"
 
+#include "version.h"
+
 using namespace std;
 using namespace Dyninst;
 using namespace Dyninst::ParseAPI;
@@ -47,9 +49,9 @@ namespace {
     }
 }
 
-static const int ParseAPI_major_version = 8;
-static const int ParseAPI_minor_version = 2;
-static const int ParseAPI_maintenance_version = 0;
+static const int ParseAPI_major_version = DYNINST_MAJOR_VERSION;
+static const int ParseAPI_minor_version = DYNINST_MINOR_VERSION;
+static const int ParseAPI_maintenance_version = DYNINST_PATCH_VERSION;
 
 void CodeObject::version(int& major, int& minor, int& maintenance)
 {
@@ -139,13 +141,22 @@ CodeObject::findBlocks(CodeRegion * cr, Address addr, set<Block*> & blocks)
     return parser->findBlocks(cr,addr,blocks);
 }
 
+// find without parsing.
+int CodeObject::findCurrentBlocks(CodeRegion * cr, Address addr, set<Block*> & blocks)
+{
+    return parser->findCurrentBlocks(cr,addr,blocks);
+}
+
 void
 CodeObject::parse() {
     if(!parser) {
         fprintf(stderr,"FATAL: internal parser undefined\n");
         return;
     }
+    cs()->startTimer(PARSE_TOTAL_TIME);
     parser->parse();
+    cs()->stopTimer(PARSE_TOTAL_TIME);
+
 }
 
 void
@@ -167,12 +178,18 @@ CodeObject::parse(CodeRegion *cr, Address target, bool recursive) {
 }
 
 void
-CodeObject::parseGaps(CodeRegion *cr) {
+CodeObject::parseGaps(CodeRegion *cr, GapParsingType type /* PreambleMatching 0 */) {
     if(!parser) {
         fprintf(stderr,"FATAL: internal parser undefined\n");
         return;
     }
-    parser->parse_gap_heuristic(cr);
+    if (type == PreambleMatching) {
+        parser->parse_gap_heuristic(cr);
+    }
+    else {
+        //Try the probabilistic gap parsing
+	parser->probabilistic_gap_parsing(cr);
+    }
 }
 
 void
@@ -258,12 +275,25 @@ CodeObject::parseNewEdges( vector<NewEdgeToParse> & worklist )
             // wrong ignore my warning. --nate
             //
             ParseWorkBundle *bundle = new ParseWorkBundle(); //parse_frames will delete when done
-            ParseWorkElem *elem = bundle->add(new ParseWorkElem
+            ParseWorkElem *elem;
+            // created checked_call_ft frames if appropriate.
+            if (worklist[idx].checked && worklist[idx].edge_type == CALL_FT) {
+                elem = bundle->add(new ParseWorkElem
+                ( bundle, 
+                  ParseWorkElem::checked_call_ft,
+                  parser->link_tempsink(worklist[idx].source, worklist[idx].edge_type),
+                  worklist[idx].target,
+                  true,
+                  false ));
+            } else {
+                elem = bundle->add(new ParseWorkElem
                 ( bundle, 
                   parser->link_tempsink(worklist[idx].source, worklist[idx].edge_type),
                   worklist[idx].target,
                   true,
                   false ));
+            }
+            
             work_elems.push_back(elem);
         }
     }

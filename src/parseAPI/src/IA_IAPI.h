@@ -42,6 +42,8 @@
 
 #include "CFG.h"
 
+using namespace std;
+
 namespace Dyninst {
 namespace InsnAdapter {
 
@@ -50,6 +52,7 @@ class IA_IAPI : public InstructionAdapter {
     friend class IA_platformDetails;
     friend class IA_x86Details;
     friend class IA_powerDetails;
+    friend class IA_aarch64Details;
     public:
         IA_IAPI(Dyninst::InstructionAPI::InstructionDecoder dec_,
                 Address start_, 
@@ -81,7 +84,8 @@ class IA_IAPI : public InstructionAdapter {
                 Dyninst::ParseAPI::Function * context,
                 Dyninst::ParseAPI::Block * currBlk,
                 unsigned int num_insns,
-                dyn_hash_map<Address, std::string> *pltFuncs) const;
+                dyn_hash_map<Address, std::string> *pltFuncs,
+		const set<Address>& knownTargets) const;
         virtual InstrumentableLevel getInstLevel(Dyninst::ParseAPI::Function *, unsigned int num_insns ) const;
         virtual bool isDynamicCall() const;
         virtual bool isAbsoluteCall() const;
@@ -92,7 +96,10 @@ class IA_IAPI : public InstructionAdapter {
         virtual bool isLeave() const;
         virtual bool isDelaySlot() const;
         virtual bool isRelocatable(InstrumentableLevel lvl) const;
-        virtual bool isTailCall(Dyninst::ParseAPI::Function *, Dyninst::ParseAPI::EdgeTypeEnum, unsigned int) const;
+        virtual bool isTailCall(Dyninst::ParseAPI::Function *, 
+	                        Dyninst::ParseAPI::EdgeTypeEnum, 
+				unsigned int,
+				const std::set<Address> &) const;
         virtual std::pair<bool, Address> getCFT() const;
         virtual bool isStackFramePreamble() const;
         virtual bool savesFP() const;
@@ -107,17 +114,21 @@ class IA_IAPI : public InstructionAdapter {
         virtual bool isNopJump() const;
         virtual bool sliceReturn(ParseAPI::Block* bit, Address ret_addr, ParseAPI::Function * func) const;
         bool isIATcall(std::string &calleeName) const;
+        virtual bool isThunk() const;
+	virtual bool isIndirectJump() const;
+
 private:
         virtual bool isRealCall() const;
-        virtual bool isThunk() const;
-        bool parseJumpTable(Dyninst::ParseAPI::Block* currBlk,
-             std::vector<std::pair< Address, Dyninst::ParseAPI::EdgeTypeEnum > >& outEdges) const;
+        bool parseJumpTable(Dyninst::ParseAPI::Function * currFunc,
+	                    Dyninst::ParseAPI::Block* currBlk,
+			    std::vector<std::pair< Address, Dyninst::ParseAPI::EdgeTypeEnum > >& outEdges) const;
         bool isIPRelativeBranch() const;
         bool isFrameSetupInsn(Dyninst::InstructionAPI::Instruction::Ptr i) const;
         virtual bool isReturn(Dyninst::ParseAPI::Function *, Dyninst::ParseAPI::Block* currBlk) const;
         bool isFakeCall() const;
         bool isLinkerStub() const;
 	bool isSysEnter() const;
+	void parseSyscall(std::vector<std::pair<Address, Dyninst::ParseAPI::EdgeTypeEnum> >& outEdges) const;
 	void parseSysEnter(std::vector<std::pair<Address, Dyninst::ParseAPI::EdgeTypeEnum> >& outEdges) const;
         std::pair<bool, Address> getFallthrough() const;
 

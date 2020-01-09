@@ -42,6 +42,8 @@
 #include "BPatch_callbacks.h"
 #include <set>
 
+#include "version.h"
+
 class BPatch_typeCollection;
 class BPatch_libInfo;
 class BPatch_module;
@@ -64,10 +66,12 @@ class func_instance;
 #define DYNINST_8_1_1
 #define DYNINST_8_1_2
 #define DYNINST_8_2
+#define DYNINST_9_0
+#define DYNINST_9_1
 
-#define DYNINST_MAJOR 8
-#define DYNINST_MINOR 2
-#define DYNINST_SUBMINOR 0
+#define DYNINST_MAJOR DYNINST_MAJOR_VERSION
+#define DYNINST_MINOR DYNINST_MINOR_VERSION
+#define DYNINST_SUBMINOR DYNINST_PATCH_VERSION
 
 #ifdef IBM_BPATCH_COMPAT
 typedef void *BPatch_Address;
@@ -243,8 +247,8 @@ public:
     void registerStopThreadCallback(BPatchStopThreadCallback stopCB);
     int getStopThreadCallbackID(BPatchStopThreadCallback stopCB);
 
-    void registerLoadedModule(PCProcess *process, mapped_module *mod);
-    void registerUnloadedModule(PCProcess *process, mapped_module *mod);
+    void registerLoadedModule(PCProcess *process, mapped_object *obj);
+    void registerUnloadedModule(PCProcess *process, mapped_object *obj);
 
     BPatch_thread *getThreadByPid(int pid, bool *exists = NULL);
     BPatch_process *getProcessByPid(int pid, bool *exists = NULL);

@@ -42,6 +42,8 @@ using namespace Dyninst;
 
 const Dyninst::Address Graph::INITIAL_ADDR = (Address) -1;
 
+
+
 void Graph::entryNodes(NodeIterator &begin, NodeIterator &end) {
     begin = NodeIterator(new NodeIteratorSet(entryNodes_.begin()));
     end = NodeIterator(new NodeIteratorSet(entryNodes_.end()));
@@ -122,7 +124,13 @@ void Graph::addNode(Node::Ptr node) {
     // std::cerr << "\t\t\t adding " << node << std::endl;
 }
 
+void Graph::clearEntryNodes() {
+    entryNodes_.clear();
+}
 
+void Graph::clearExitNodes() {
+    exitNodes_.clear();
+}
 // Fancy-shmancy predicate based search methods...
 
 bool Graph::find(NodePredicate::Ptr pred, NodeIterator &begin, NodeIterator &end) {

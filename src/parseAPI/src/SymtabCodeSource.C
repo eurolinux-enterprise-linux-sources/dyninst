@@ -37,6 +37,7 @@
 
 #include "symtabAPI/h/Symtab.h"
 #include "symtabAPI/h/Function.h"
+#include "symtabAPI/h/Symbol.h"
 
 #include "CodeSource.h"
 #include "debug_parse.h"
@@ -60,6 +61,12 @@ SymtabCodeRegion::SymtabCodeRegion(
     _symtab(st),
     _region(reg)
 {
+    vector<SymtabAPI::Symbol*> symbols;
+    st->getAllSymbols(symbols);
+    for (auto sit = symbols.begin(); sit != symbols.end(); ++sit)
+        if ( (*sit)->getRegion() == reg && (*sit)->getType() != SymtabAPI::Symbol::ST_FUNCTION) {
+	    knownData[(*sit)->getOffset()] = (*sit)->getOffset() + (*sit)->getSize();
+	}
 }
 
 void
@@ -73,8 +80,8 @@ SymtabCodeRegion::names(Address entry, vector<string> & names)
     bool found = _symtab->findFuncByEntryOffset(f,entry);
     if(found) {
         // just pretty names?
-        const vector<string> & pretty = f->getAllPrettyNames();
-        names.insert(names.begin(),pretty.begin(),pretty.end());
+        names.insert(names.begin(),f->pretty_names_begin(),
+		     f->pretty_names_end());
     }
 	else {
 		cerr << "\t Failed to find name" << endl;
@@ -139,26 +146,18 @@ SymtabCodeRegion::getAddressWidth() const
 Architecture
 SymtabCodeRegion::getArch() const
 {
-#if defined(arch_power)
-    if(getAddressWidth() == 8)
-        return Arch_ppc64;
-    else
-        return Arch_ppc32;
-#elif defined(arch_x86) || defined(arch_x86_64)
-    if(getAddressWidth() == 8)
-        return Arch_x86_64;
-    else
-        return Arch_x86;
-#else
-    return Arch_none;
-#endif
+    return _symtab->getArchitecture();
 }
 
 bool
 SymtabCodeRegion::isCode(const Address addr) const
 {
     if(!contains(addr)) return false;
-
+    map<Address, Address>::const_iterator dit = knownData.upper_bound(addr);
+    if (dit != knownData.begin()) {
+        --dit;
+	if (dit->first <= addr && dit->second > addr) return false;
+    }
     // XXX this is the predicate from Symtab::isCode(a) +
     //     the condition by which Symtab::codeRegions_ is filled
     return !_region->isBSS() && 
@@ -176,6 +175,16 @@ SymtabCodeRegion::isData(const Address addr) const
     //     and RT_TEXTDATA. Mimicking that behavior
     return _region->isData() || 
            _region->getRegionType()==SymtabAPI::Region::RT_TEXTDATA;
+}
+
+bool
+SymtabCodeRegion::isReadOnly(const Address addr) const
+{
+    if(!contains(addr)) return false;
+    if (_region->getRegionName() == ".data.rel.ro") return true;
+//    parsing_printf("Region name %s, permission %d\n", _region->getRegionName().c_str(), _region->getRegionPermissions());
+    return _region->getRegionPermissions() == SymtabAPI::Region::RP_R ||
+           _region->getRegionPermissions() == SymtabAPI::Region::RP_RX;
 }
 
 Address
@@ -270,6 +279,10 @@ SymtabCodeSource::init_stats() {
         stats_parse->add(PARSE_TAILCALL_COUNT, CountStat);
         stats_parse->add(PARSE_TAILCALL_FAIL, CountStat);
 
+	stats_parse->add(PARSE_JUMPTABLE_TIME, TimerStat);
+	stats_parse->add(PARSE_TOTAL_TIME, TimerStat);
+
+
         _have_stats = true;
     }
 
@@ -309,6 +322,9 @@ SymtabCodeSource::print_stats() const {
         fprintf(stderr, "\t\t isTailCall attempts: %ld\n", (*stats_parse)[PARSE_TAILCALL_COUNT]->value());
         fprintf(stderr, "\t\t isTailCall failures: %ld\n", (*stats_parse)[PARSE_TAILCALL_FAIL]->value());
 
+	fprintf(stderr, "\t Parsing total time: %.2lf\n", (*stats_parse)[PARSE_TOTAL_TIME]->usecs());
+	fprintf(stderr, "\t Parsing jump table time: %.2lf\n", (*stats_parse)[PARSE_JUMPTABLE_TIME]->usecs());
+
     }
 }
 
@@ -333,6 +349,22 @@ SymtabCodeSource::decrementCounter(const std::string& name) const
 {
     if (_have_stats) {
         stats_parse->decrementCounter(name);
+    }
+}
+
+void
+SymtabCodeSource::startTimer(const std::string & name) const
+{
+    if (_have_stats) {
+        stats_parse->startTimer(name);
+    }
+}
+
+void
+SymtabCodeSource::stopTimer(const std::string & name) const
+{
+    if (_have_stats) {
+        stats_parse->stopTimer(name);
     }
 }
 
@@ -428,6 +460,17 @@ SymtabCodeSource::init_hints(dyn_hash_map<void*, CodeRegion*> & rmap,
                 (*fsit)->getFirstSymbol()->getPrettyName().c_str());
             continue;
         }
+		/*Achin added code starts 12/15/2014*/
+		if(!strcmp((*fsit)->getFirstSymbol()->getPrettyName().c_str(),"_non_rtti_object::`vftable'") || !strcmp((*fsit)->getFirstSymbol()->getPrettyName().c_str(),"bad_cast::`vftable'") || !strcmp((*fsit)->getFirstSymbol()->getPrettyName().c_str(),"exception::`vftable'") || !strcmp((*fsit)->getFirstSymbol()->getPrettyName().c_str(),"bad_typeid::`vftable'") || !strcmp((*fsit)->getFirstSymbol()->getPrettyName().c_str(),"sys_errlist"))
+		{
+		continue;
+		}
+
+		if(!strcmp((*fsit)->getFirstSymbol()->getPrettyName().c_str(),"std::_non_rtti_object::`vftable'") || !strcmp((*fsit)->getFirstSymbol()->getPrettyName().c_str(),"std::__non_rtti_object::`vftable'") || !strcmp((*fsit)->getFirstSymbol()->getPrettyName().c_str(),"std::bad_cast::`vftable'") || !strcmp((*fsit)->getFirstSymbol()->getPrettyName().c_str(),"std::exception::`vftable'") || !strcmp((*fsit)->getFirstSymbol()->getPrettyName().c_str(),"std::bad_typeid::`vftable'"))
+		{
+		continue;
+		}
+		/*Achin added code ends*/
 
         if(HASHDEF(seen,(*fsit)->getOffset())) {
             // XXX it looks as though symtabapi now does de-duplication
@@ -471,6 +514,7 @@ SymtabCodeSource::init_hints(dyn_hash_map<void*, CodeRegion*> & rmap,
                 cr->offset()+cr->length());
         }
     }
+    sort(_hints.begin(), _hints.end());
 }
 
 void
@@ -494,54 +538,29 @@ SymtabCodeSource::nonReturning(Address addr)
     _symtab->findFuncByEntryOffset(f,addr); 
 
     if(f) {
-      const std::vector<std::string> &names = f->getAllMangledNames();
-      for (unsigned i = 0; i < names.size(); ++i) {
-	if (nonReturning(names[i])) {
-	  return true;
-	}
+      for(auto i = f->mangled_names_begin();
+	  i != f->mangled_names_end();
+	  ++i)
+      {
+	if(CodeSource::nonReturning(*i)) return true;
       }
     }
     return false;
 }
 
-dyn_hash_map<std::string, bool>
-SymtabCodeSource::non_returning_funcs =
-    boost::assign::map_list_of
-        ("exit",true)
-        ("abort",true)
-        ("__f90_stop",true)
-        ("fancy_abort",true)
-        ("__stack_chk_fail",true)
-        ("__assert_fail",true)
-        ("ExitProcess",true)
-        ("_ZSt17__throw_bad_allocv",true)
-        ("_ZSt20__throw_length_errorPKc",true)
-        ("_Unwind_Resume",true)
-        ("longjmp",true)
-        ("siglongjmp",true)
-        ("_ZSt16__throw_bad_castv",true)
-        ("_ZSt19__throw_logic_errorPKc",true)
-        ("_ZSt20__throw_out_of_rangePKc",true)
-        ("__cxa_rethrow",true)
-        ("__cxa_throw",true)
-        ("_ZSt21__throw_runtime_errorPKc",true)
-        ("_gfortran_os_error",true)
-        ("_gfortran_runtime_error",true)
-        ("_gfortran_stop_numeric", true)
-   ("for_stop_core", true)
-  ("__sys_exit", true);
-
 bool
-SymtabCodeSource::nonReturning(string name)
+SymtabCodeSource::nonReturningSyscall(int num)
 {
-#if defined(os_windows)
-	// We see MSVCR<N>.exit
-	// Of course, it's often reached via indirect call, but hope never fails.
-	if ((name.compare(0, strlen("MSVCR"), "MSVCR") == 0) &&
-		(name.find("exit") != name.npos)) return true;
-#endif
-	parsing_printf("Checking non-returning (Symtab) for %s\n", name.c_str());
-    return non_returning_funcs.find(name) != non_returning_funcs.end();
+  parsing_printf("Checking non-returning (Symtab) for %d\n", num);
+  Architecture arch = getArch();
+  switch(arch) {
+    case(Arch_x86):
+      return non_returning_syscalls_x86.find(num) != non_returning_syscalls_x86.end();
+    case(Arch_x86_64):
+      return non_returning_syscalls_x86_64.find(num) != non_returning_syscalls_x86_64.end();
+    default:
+      return false;
+  }
 }
 
 Address
@@ -590,6 +609,7 @@ SymtabCodeSource::lookup_region(const Address addr) const
 inline void 
 SymtabCodeSource::overlapping_warn(const char * file, unsigned line) const
 {
+    
     if(regionsOverlap()) {
         fprintf(stderr,"Invocation of routine at %s:%d is ambiguous for "
                        "binaries with overlapping code regions\n",
@@ -642,19 +662,7 @@ SymtabCodeSource::getAddressWidth() const
 Architecture
 SymtabCodeSource::getArch() const
 {
-#if defined(arch_power)
-    if(getAddressWidth() == 8)
-        return Arch_ppc64;
-    else
-        return Arch_ppc32;
-#elif defined(arch_x86) || defined(arch_x86_64)
-    if(getAddressWidth() == 8)
-        return Arch_x86_64;
-    else
-        return Arch_x86;
-#else
-    return Arch_none;
-#endif
+    return _symtab->getArchitecture();
 }
 
 bool
@@ -663,6 +671,7 @@ SymtabCodeSource::isCode(const Address addr) const
     overlapping_warn(FILE__,__LINE__);
 
     CodeRegion * cr = lookup_region(addr);
+
     if(cr)
         return cr->isCode(addr);
     else
@@ -680,6 +689,19 @@ SymtabCodeSource::isData(const Address addr) const
     else
         return false;
 }
+
+bool
+SymtabCodeSource::isReadOnly(const Address addr) const
+{
+    overlapping_warn(FILE__,__LINE__);
+
+    CodeRegion * cr = lookup_region(addr);
+    if(cr)
+        return cr->isReadOnly(addr);
+    else
+        return false;
+}
+
 
 Address
 SymtabCodeSource::offset() const

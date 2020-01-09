@@ -73,8 +73,10 @@ using namespace Dyninst::SymtabAPI;
 #include "inst-x86.h"
 #elif defined(arch_power)
 #include "inst-power.h"
+#elif defined(arch_aarch64)
+#include "inst-aarch64.h"
 #else
-#error "Unknown architecture, expected x86, x86_64, or power"
+#error "Unknown architecture, expected x86, x86_64, power or aarch64"
 #endif
 
 
@@ -615,7 +617,7 @@ BPatch_constExpr::BPatch_constExpr( signed int value ) {
         assert( BPatch::bpatch != NULL );
 
         ast_wrapper = AstNodePtr(AstNode::operandNode(AstNode::Constant,
-                                                                 (void *)(unsigned long) value));
+                                                                 (void *)(uintptr_t) value));
         ast_wrapper->setTypeChecking( BPatch::bpatch->isTypeChecked() );
 
         BPatch_type * type = BPatch::bpatch->stdTypes->findType( "int" );
@@ -627,7 +629,7 @@ BPatch_constExpr::BPatch_constExpr( unsigned int value ) {
         assert( BPatch::bpatch != NULL );
 
         ast_wrapper = AstNodePtr(AstNode::operandNode(AstNode::Constant,
-                                                                 (void *)(unsigned long) value));
+                                                                 (void *)(uintptr_t) value));
         ast_wrapper->setTypeChecking( BPatch::bpatch->isTypeChecked() );
 
         BPatch_type * type = BPatch::bpatch->stdTypes->findType( "unsigned int" );
@@ -639,7 +641,7 @@ BPatch_constExpr::BPatch_constExpr( signed long value ) {
         assert( BPatch::bpatch != NULL );
 
         ast_wrapper = AstNodePtr(AstNode::operandNode(AstNode::Constant,
-                                                                 (void *)(unsigned long) value));
+                                                                 (void *)(uintptr_t) value));
         ast_wrapper->setTypeChecking( BPatch::bpatch->isTypeChecked() );
 
         BPatch_type * type = BPatch::bpatch->stdTypes->findType( "long" );
@@ -651,13 +653,23 @@ BPatch_constExpr::BPatch_constExpr( unsigned long value ) {
         assert( BPatch::bpatch != NULL );
 
         ast_wrapper = AstNodePtr(AstNode::operandNode(AstNode::Constant,
-                                                                 (void *)(unsigned long) value));
+                                                                 (void *)(uintptr_t) value));
         ast_wrapper->setTypeChecking( BPatch::bpatch->isTypeChecked() );
-
         BPatch_type * type = BPatch::bpatch->stdTypes->findType( "unsigned long" );
         assert( type != NULL );
         ast_wrapper->setType( type );
         }
+
+BPatch_constExpr::BPatch_constExpr(unsigned long long value) {
+	assert(BPatch::bpatch != NULL);
+
+	ast_wrapper = AstNodePtr(AstNode::operandNode(AstNode::Constant,
+		(void *)(uintptr_t)value));
+	ast_wrapper->setTypeChecking(BPatch::bpatch->isTypeChecked());
+	BPatch_type * type = BPatch::bpatch->stdTypes->findType("unsigned long long");
+	assert(type != NULL);
+	ast_wrapper->setType(type);
+}
 
 /*
  * BPatch_constExpr::BPatch_constExpr
@@ -702,7 +714,7 @@ BPatch_constExpr::BPatch_constExpr(const void *value)
 
 BPatch_constExpr::BPatch_constExpr(long long value)
 {
-   ast_wrapper = AstNodePtr(AstNode::operandNode(AstNode::Constant, (void *)(long)value));
+   ast_wrapper = AstNodePtr(AstNode::operandNode(AstNode::Constant, (void *)(uintptr_t)value));
 
     assert(BPatch::bpatch != NULL);
     ast_wrapper->setTypeChecking(BPatch::bpatch->isTypeChecked());
@@ -717,11 +729,11 @@ BPatch_constExpr::BPatch_constExpr(long long value)
 
 char *BPatch_variableExpr::getNameWithLength(char *buffer, int max)
 {
-  if (max > strlen(name)) {
-    strcpy (buffer, name);
+  if (max > name.length()) {
+    strcpy (buffer, name.c_str());
     return buffer;
   } else {
-    strncpy (buffer, name, max-1)[max-1]='\0';
+    strncpy (buffer, name.c_str(), max-1)[max-1]='\0';
   }
   return NULL;
 }
@@ -1008,7 +1020,7 @@ BPatch_sequence::BPatch_sequence(const BPatch_Vector<BPatch_snippet *> &items)
  * type         The type of the variable.
  * ast          The ast expression for the variable
  */
-BPatch_variableExpr::BPatch_variableExpr(char *in_name,
+BPatch_variableExpr::BPatch_variableExpr(const char *in_name,
                                          BPatch_addressSpace *in_addSpace,
                                          AddressSpace *in_lladdSpace,
                                          AstNodePtr ast_wrapper_,
@@ -1037,7 +1049,7 @@ BPatch_variableExpr::BPatch_variableExpr(char *in_name,
 BPatch_variableExpr::BPatch_variableExpr(BPatch_addressSpace *in_addSpace,
                                          AddressSpace *ll_addSpace, int_variable *iv,
                                          BPatch_type *type)
-  : name(NULL),
+  : name(),
     appAddSpace(in_addSpace),
     lladdrSpace(ll_addSpace),
     address(NULL),
@@ -1049,7 +1061,7 @@ BPatch_variableExpr::BPatch_variableExpr(BPatch_addressSpace *in_addSpace,
   const image_variable* img_var = NULL;
   if(iv)
   {
-    name = iv->symTabName().c_str();
+    name = iv->symTabName();
     address = reinterpret_cast<void*>(iv->getAddress());
     intvar = iv;
     img_var = iv->ivar();
@@ -1157,7 +1169,7 @@ BPatch_variableExpr::BPatch_variableExpr(BPatch_addressSpace *in_addSpace,
                                          BPatch_type *typ,
                                          BPatch_storageClass in_storage,
                                          BPatch_point *scp) :
-   name(NULL),
+   name(),
    appAddSpace(in_addSpace),
    lladdrSpace(in_lladdrSpace),
    address(in_address),
@@ -1229,7 +1241,7 @@ BPatch_variableExpr::BPatch_variableExpr(BPatch_addressSpace *in_addSpace,
                                          AddressSpace *in_lladdSpace,
                                          BPatch_localVar *lv, BPatch_type *typ,
                                          BPatch_point *scp):
-   name(NULL),
+   name(),
    appAddSpace(in_addSpace),
    lladdrSpace(in_lladdSpace),
    address(NULL),
@@ -1325,7 +1337,7 @@ bool BPatch_variableExpr::readValue(void *dst)
 {
 	if (isLocal) {
 		char msg[2048];
-		sprintf(msg, "variable %s is not a global variable, cannot read using readValue()",name);
+		sprintf(msg, "variable %s is not a global variable, cannot read using readValue()",name.c_str());
 		BPatch_reportError(BPatchWarning, 109,msg);
 		return false;
 	}
@@ -1357,7 +1369,7 @@ bool BPatch_variableExpr::readValue(void *dst, int len)
 {
         if (isLocal) {
                 char msg[2048];
-                sprintf(msg, "variable %s is not a global variable, cannot read using readValue()",name);
+                sprintf(msg, "variable %s is not a global variable, cannot read using readValue()",name.c_str());
                 BPatch_reportError(BPatchWarning, 109,msg);
                 return false;
         }
@@ -1381,7 +1393,7 @@ bool BPatch_variableExpr::writeValue(const void *src, bool /* saveWorld */)
 {
   if (isLocal) {
     char msg[2048];
-    sprintf(msg, "variable %s is not a global variable, cannot write",name);
+    sprintf(msg, "variable %s is not a global variable, cannot write",name.c_str());
     BPatch_reportError(BPatchWarning, 109,msg);
     return false;
   }
@@ -1421,7 +1433,7 @@ bool BPatch_variableExpr::writeValue(const void *src, int len, bool /*saveWorld*
 {
   if (isLocal) {
     char msg[2048];
-    sprintf(msg, "variable %s is not a global variable, cannot write",name);
+    sprintf(msg, "variable %s is not a global variable, cannot write",name.c_str());
     BPatch_reportError(BPatchWarning, 109,msg);
     return false;
   }
@@ -1442,7 +1454,7 @@ AddressSpace *BPatch_variableExpr::getAS()
 
 const char *BPatch_variableExpr::getName()
 {
-  return name;
+  return name.empty() ? NULL : name.c_str();
 }
 
 void *BPatch_variableExpr::getBaseAddr()

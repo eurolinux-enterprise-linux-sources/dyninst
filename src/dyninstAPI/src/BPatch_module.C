@@ -464,8 +464,10 @@ BPatch_module::findFunction(const char *name,
          // If it matches, push onto the vector
          // Check all pretty names (and then all mangled names if there is no match)
          bool found_match = false;
-         for (unsigned piter = 0; piter < func->prettyNameVector().size(); piter++) {
-            const string &pName = func->prettyNameVector()[piter];
+         for (auto piter = func->pretty_names_begin(); 
+	      piter != func->pretty_names_end();
+	      ++piter) {
+	   const string &pName = *piter;
             int err;     
             if (0 == (err = regexec(&comp_pat, pName.c_str(), 1, NULL, 0 ))){
                if (func->isInstrumentable() || incUninstrumentable) {
@@ -479,8 +481,10 @@ BPatch_module::findFunction(const char *name,
          }
          if (found_match) continue; // Don't check mangled names
 
-         for (unsigned miter = 0; miter < func->symTabNameVector().size(); miter++) {
-            const string &mName = func->symTabNameVector()[miter];
+         for (auto miter = func->symtab_names_begin(); 
+	      miter != func->symtab_names_end();
+	      ++miter) {
+	   const string &mName = *miter;
             int err;
 
             if (0 == (err = regexec(&comp_pat, mName.c_str(), 1, NULL, 0 ))){
@@ -674,7 +678,7 @@ bool BPatch_module::getSourceLines(unsigned long addr,
    }
 
    unsigned int originalSize = lines.size();
-   std::vector<Statement *> lines_ll;
+   std::vector<Statement::Ptr> lines_ll;
 
    Module *stmod = mod->pmod()->mod();
    assert(stmod);
@@ -686,7 +690,7 @@ bool BPatch_module::getSourceLines(unsigned long addr,
 
    for (unsigned int j = 0; j < lines_ll.size(); ++j)
    {
-	   Statement *t = lines_ll[j];
+      Statement::ConstPtr t = lines_ll[j];
 	   lines.push_back(BPatch_statement(this, t));
    }
 
@@ -698,7 +702,7 @@ bool BPatch_module::getStatements(BPatch_Vector<BPatch_statement> &statements)
 	// Iterate over each address range in the line information
 	SymtabAPI::Module *stmod = mod->pmod()->mod();
 	assert(stmod);
-	std::vector<SymtabAPI::Statement *> statements_ll;
+	std::vector<SymtabAPI::Statement::Ptr> statements_ll;
 
 	if (!stmod->getStatements(statements_ll))
 	{
@@ -710,7 +714,7 @@ bool BPatch_module::getStatements(BPatch_Vector<BPatch_statement> &statements)
 		// Form a BPatch_statement object for this entry
 		// Note:  Line information stores offsets, so we need to adjust to
 		//  addresses
-		SymtabAPI::Statement *stm = statements_ll[i];
+		SymtabAPI::Statement::ConstPtr stm = statements_ll[i];
 		BPatch_statement statement(this, stm);
 
 		// Add this statement
@@ -721,8 +725,8 @@ bool BPatch_module::getStatements(BPatch_Vector<BPatch_statement> &statements)
 
 }
 
-bool BPatch_module::getAddressRanges( const char * fileName, 
-		unsigned int lineNo, std::vector< std::pair< Address, Address > > & ranges ) 
+bool BPatch_module::getAddressRanges(const char *fileName,
+                                     unsigned int lineNo, std::vector<SymtabAPI::AddressRange > &ranges)
 {
 	unsigned int starting_size = ranges.size();
 
@@ -821,6 +825,10 @@ BPatch_hybridMode BPatch_module::getHybridMode()
     return mod->obj()->hybridMode();
 }
 
+void BPatch_module::enableDefensiveMode(bool on) {
+    mod->obj()->enableDefensiveMode(on);
+}
+
 bool BPatch_module::isExploratoryModeOn()
 { 
     if (!mod || !getAS()->proc()) {
@@ -908,41 +916,6 @@ bool BPatch_module::setAnalyzedCodeWriteable(bool writeable)
 Address BPatch_module::getLoadAddr()
 {
    return mod->obj()->codeBase();
-}
-
-BPatchSnippetHandle* BPatch_module::insertInitCallback(BPatch_snippet& callback)
-{
-    BPatch_Vector<BPatch_function*> init_funcs;
-    findFunction("_init", init_funcs);    
-    if(!init_funcs.empty())
-    {
-        assert(init_funcs[0]);
-        BPatch_Vector<BPatch_point*>* init_entry = init_funcs[0]->findPoint(BPatch_entry);
-        if(init_entry && !init_entry->empty() && (*init_entry)[0])
-        {
-            startup_printf("\tinserting init snippet at 0x%lx\n", (*init_entry)[0]->getAddress());
-            return addSpace->insertSnippet(callback, *((*init_entry)[0]));
-        }
-    }
-    
-    return NULL;
-}
-
-BPatchSnippetHandle* BPatch_module::insertFiniCallback(BPatch_snippet& callback)
-{
-    BPatch_Vector<BPatch_function*> fini_funcs;
-    findFunction("_fini", fini_funcs);
-    if(!fini_funcs.empty())
-    {
-        assert(fini_funcs[0]);
-        BPatch_Vector<BPatch_point*>* fini_exit = fini_funcs[0]->findPoint(BPatch_exit);
-        if(fini_exit && !fini_exit->empty() && (*fini_exit)[0])
-        {
-            startup_printf("\tinserting fini snippet at 0x%lx\n", (*fini_exit)[0]->getAddress());
-            return addSpace->insertSnippet(callback, *((*fini_exit)[0]));
-        }
-    }
-    return NULL;
 }
 
 BPatch_function *BPatch_module::findFunctionByEntry(Dyninst::Address entry)

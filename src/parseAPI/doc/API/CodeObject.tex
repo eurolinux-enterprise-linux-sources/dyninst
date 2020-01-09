@@ -35,7 +35,9 @@ void parse()
 \apidesc{Recursively parses the binary represented by this CodeObject from all
 known function entry points (i.e., the hints provided by the CodeSource). This
 method and the following parsing methods may safely be invoked repeatedly if
-new information about function locations is provided through the CodeSource.}
+new information about function locations is provided through the CodeSource.
+Note that these parsing methods do not automatically perform speculative gap parsing.
+parseGaps should be used for this purpose.}
 
 \begin{apient}
 void parse(Address target,
@@ -67,10 +69,27 @@ bool parseNewEdges( vector<NewEdgeToParse> & worklist )
 that were not included when the function was originally parsed. 
 }
 
+ParseAPI is able to speculatively parse gaps 
+(regions of binary that has not been identified as code or data yet)
+to identify function entry points and
+perform control flow traversal.
+
+\begin{center}
+\begin{tabular}{lp{10cm}}
+\toprule
+GapParsingType & Technique description \\
+\midrule
+PreambleMatching & If instruction patterns are matched at an adderss, the address is a function entry point  \\
+IdiomMatching & Based on a pre-trained model, this technique calculates the probability of an address to be a function entry point and predicts whether which addresses are function entry points\\
+\bottomrule
+\end{tabular}
+\end{center}
+
 \begin{apient}
-void parseGaps(CodeRegion *cr)
+void parseGaps(CodeRegion *cr,
+               GapParsingType type=IdiomMatching)
 \end{apient}
-\apidesc{Speculatively parse the indicated region of the binary using pattern matching to find likely function entry points. Only enabled on the x86 32-bit platform.}
+\apidesc{Speculatively parse the indicated region of the binary using the specified technique to find likely function entry points, enabled on the x86 and x86-64 platforms.}
 
 \begin{apient}
 Function * findFuncByEntry(CodeRegion * cr,
@@ -94,9 +113,9 @@ int findFuncs(CodeRegion * cr,
 \apidesc{Finds all functions overlapping the range \code{[start,end)} in the code region, adding each to \code{funcs}. The number of results of this stabbing query are returned.}
 
 \begin{apient}
-funclist & funcs()
+const funclist & funcs()
 \end{apient}
-\apidesc{Returns a reference to a container of all functions in the binary. Refer to Section \ref{sec:containers} for container access details.}
+\apidesc{Returns a const reference to a container of all functions in the binary. Refer to Section \ref{sec:containers} for container access details.}
 
 \begin{apient}
 Block * findBlockByEntry(CodeRegion * cr,
@@ -147,6 +166,17 @@ void startCallbackBatch()
 void finishCallbackBatch()
 \end{apient}
 \apidesc{Completes all callbacks in the current batch.}
+
+\begin{apient}
+void registerCallback(ParseCallback *cb);
+\end{apient}
+\apidesc{Register a callback \code{cb}}
+
+\begin{apient}
+void unregisterCallback(ParseCallback *cb);
+\end{apient}
+\apidesc{Unregister an existing callback \code{cb}}
+
 
 \begin{apient}
 void finalize()

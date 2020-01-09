@@ -30,18 +30,16 @@
 
 // $Id: Object.C,v 1.31 2008/11/03 15:19:25 jaw Exp $
 
-#include "common/src/serialize.h"
-
 #include "Symtab.h"
 #include "symutil.h"
 #include "Module.h"
 #include "Collections.h"
 #include "Function.h"
-#include "common/h/VariableLocation.h"
-#include "symtabAPI/src/Object.h"
+#include "VariableLocation.h"
+#include "Object.h"
 
 #if !defined(os_windows)
-#include "dwarf/h/dwarfFrameParser.h"
+#include "dwarfFrameParser.h"
 #endif
 
 #include <iterator>
@@ -53,47 +51,21 @@ using namespace std;
 using namespace Dyninst;
 using namespace Dyninst::SymtabAPI;
 
-FunctionBase::FunctionBase(Symbol *sym) :
-   Aggregate(sym),
-   locals(NULL),
-   params(NULL),
-   retType_(NULL),
-   functionSize_(0),
-   inline_parent(NULL),
-   frameBaseExpanded_(false),
-   data(NULL)
-{
-}
-
 FunctionBase::FunctionBase() :
-   Aggregate(),
    locals(NULL),
    params(NULL),
-   retType_(NULL),
    functionSize_(0),
+   retType_(NULL),
    inline_parent(NULL),
    frameBaseExpanded_(false),
    data(NULL)
-{
-}
-
-FunctionBase::FunctionBase(Module *m) :
-   Aggregate(m),
-   locals(NULL),
-   params(NULL),
-   retType_(NULL),
-   functionSize_(0),
-   inline_parent(NULL),
-   frameBaseExpanded_(false),
-   data(NULL)
-
 {
 }
 
 Type *FunctionBase::getReturnType() const
 {
-   module_->exec()->parseTypesNow();	
-   return retType_;
+    getModule()->exec()->parseTypesNow();	
+    return retType_;
 }
 
 bool FunctionBase::setReturnType(Type *newType)
@@ -104,7 +76,7 @@ bool FunctionBase::setReturnType(Type *newType)
 
 bool FunctionBase::findLocalVariable(std::vector<localVar *> &vars, std::string name)
 {
-   module_->exec()->parseTypesNow();	
+    getModule()->exec()->parseTypesNow();	
 
    unsigned origSize = vars.size();	
 
@@ -133,7 +105,7 @@ const FuncRangeCollection &FunctionBase::getRanges()
 
 bool FunctionBase::getLocalVariables(std::vector<localVar *> &vars)
 {
-   module_->exec()->parseTypesNow();	
+    getModule()->exec()->parseTypesNow();	
    if (!locals)
       return false;
 
@@ -147,7 +119,7 @@ bool FunctionBase::getLocalVariables(std::vector<localVar *> &vars)
 
 bool FunctionBase::getParams(std::vector<localVar *> &params_)
 {
-   module_->exec()->parseTypesNow();
+    getModule()->exec()->parseTypesNow();
    if (!params)
       return false;
 
@@ -179,13 +151,13 @@ bool FunctionBase::addParam(localVar *param)
 
 FunctionBase *FunctionBase::getInlinedParent()
 {
-   module_->exec()->parseTypesNow();	
+    getModule()->exec()->parseTypesNow();	
    return inline_parent;
 }
 
 const InlineCollection &FunctionBase::getInlines()
 {
-   module_->exec()->parseTypesNow();	
+    getModule()->exec()->parseTypesNow();	
    return inlines;
 }
 
@@ -237,7 +209,11 @@ bool FunctionBase::setFramePtr(vector<VariableLocation> *locs)
 
 std::pair<std::string, Dyninst::Offset> InlinedFunction::getCallsite()
 {
-   return make_pair(callsite_file, callsite_line);
+    std::string callsite_file = "<unknown>";
+    if(callsite_file_number > 0 && callsite_file_number < module_->getStrings()->size()) {
+        callsite_file = (*module_->getStrings())[callsite_file_number].str;
+    }
+    return make_pair(callsite_file, callsite_line);
 }
 
 void FunctionBase::expandLocation(const VariableLocation &loc,
@@ -256,8 +232,8 @@ void FunctionBase::expandLocation(const VariableLocation &loc,
    }
 
    Dyninst::Dwarf::DwarfFrameParser::Ptr frameParser =
-      Dyninst::Dwarf::DwarfFrameParser::create(*module_->exec()->getObject()->dwarf->frame_dbg(),
-                                               module_->exec()->getObject()->getArch());
+   Dyninst::Dwarf::DwarfFrameParser::create(*getModule()->exec()->getObject()->dwarf->frame_dbg(),
+					    getModule()->exec()->getObject()->getArch());
    
    std::vector<VariableLocation> FDEs;
    Dyninst::Dwarf::FrameErrors_t err;
@@ -336,7 +312,7 @@ void FunctionBase::setData(void *d)
 }
 
 Function::Function(Symbol *sym)
-    : FunctionBase(sym)
+    : FunctionBase(), Aggregate(sym)
 {}
 
 Function::Function()
@@ -387,7 +363,7 @@ bool Function::removeSymbol(Symbol *sym)
 {
 	removeSymbolInt(sym);
 	if (symbols_.empty()) {
-		module_->exec()->deleteFunction(this);
+	    getModule()->exec()->deleteFunction(this);
 	}
 	return true;
 }
@@ -434,6 +410,11 @@ std::ostream &operator<<(std::ostream &os, const Dyninst::SymtabAPI::Function &f
 
 }
 
+std::string Function::getName() const
+{
+    return getFirstSymbol()->getMangledName();
+}
+
 bool FunctionBase::operator==(const FunctionBase &f)
 {
 	if (retType_ && !f.retType_)
@@ -450,10 +431,14 @@ bool FunctionBase::operator==(const FunctionBase &f)
 }
 
 InlinedFunction::InlinedFunction(FunctionBase *parent) :
-   FunctionBase(parent->getModule()), callsite_line(0)
+    FunctionBase(),
+    callsite_file_number(0),
+    callsite_line(0),
+    module_(parent->getModule())
 {
-   inline_parent = parent;
-   parent->inlines.push_back(this);
+    inline_parent = parent;
+    parent->inlines.push_back(this);
+    offset_ = parent->getOffset();
 }
 
 InlinedFunction::~InlinedFunction()
@@ -463,4 +448,44 @@ InlinedFunction::~InlinedFunction()
 bool InlinedFunction::removeSymbol(Symbol *)
 {
    return false;
+}
+
+bool InlinedFunction::addMangledName(std::string name, bool /*isPrimary*/, bool /*isDebug*/)
+{
+    name_ = name;
+    return true;
+}
+
+bool InlinedFunction::addPrettyName(std::string name, bool /*isPrimary*/, bool /*isDebug*/)
+{
+    name_ = name;
+    return true;
+}
+
+std::string InlinedFunction::getName() const
+{
+    return name_;
+}
+
+Offset InlinedFunction::getOffset() const
+{
+    return offset_;
+}
+
+unsigned InlinedFunction::getSize() const
+{
+    return functionSize_;//inline_parent->getSize();
+}
+
+void InlinedFunction::setFile(string filename) {
+    StringTablePtr strs = module_->getStrings();
+    // This looks gross, but here's what it does:
+    // Get index 1 (unique by name). Insert the filename on that index (which defaults to push_back if empty).
+    // Returns an <iterator, bool>; get the iterator (we don't care if it's new). Project to random access (index 0).
+    // Difference from begin == array index in string table.
+    callsite_file_number = strs->project<0>(strs->get<1>().insert(filename).first) - strs->begin();
+}
+
+Module* Function::getModule() const {
+    return module_;
 }

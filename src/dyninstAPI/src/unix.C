@@ -37,7 +37,7 @@
 #include "dynProcess.h"
 #include "dynThread.h"
 #include "function.h"
-
+#include "binaryEdit.h"
 #include "common/src/pathName.h"
 
 #include <sstream>
@@ -134,19 +134,21 @@ bool PCProcess::multithread_capable(bool ignoreIfMtNotSet) {
  **/
 static void findThreadFuncs(PCProcess *p, std::string func,
                             pdvector<func_instance *> &result) {
-    bool found = false;
-    mapped_module *lpthread = p->findModule("libpthread*", true);
+    const pdvector<func_instance*>* found = NULL;
+    mapped_object *lpthread = p->findObject("libpthread*", true);
     if (lpthread)
-        found = lpthread->findFuncVectorByPretty(func, result);
-    if (found)
+        found = lpthread->findFuncVectorByMangled(func);
+    if (found) {
+	result = *found;
         return;
-
-    mapped_module *lc = p->findModule("libc.so*", true);
+    }
+    mapped_object *lc = p->findObject("libc.so*", true);
     if (lc)
-        found = lc->findFuncVectorByPretty(func, result);
-    if (found)
+        found = lc->findFuncVectorByMangled(func);
+    if (found) {
+	result = *found;
         return;
-
+    }
     p->findFuncsByPretty(func, result);
 }
 
@@ -296,10 +298,36 @@ void PCProcess::redirectFds(int stdin_fd, int stdout_fd, int stderr_fd,
     if( stderr_fd != 2 ) fds.insert(std::make_pair(stderr_fd, 2));
 }
 
+bool PCProcess::getDyninstRTLibName()
+{
+    startup_printf("Begin getDyninstRTLibName\n");
+    bool use_abi_rt = false;
+#if defined(arch_64bit)
+    use_abi_rt = (getAddressWidth() == 4);
+#endif
+
+    std::vector<std::string> rt_paths;
+    std::string rt_base = "libdyninstAPI_RT";
+    if(use_abi_rt) rt_base += "_m32";
+    rt_base += ".so";
+    if(!BinaryEdit::getResolvedLibraryPath(rt_base, rt_paths) || rt_paths.empty())
+    {
+	startup_printf("%s[%d]: Could not find libdyninstAPI_RT.so in search path\n", FILE__, __LINE__);
+	return false;
+    }
+    for(auto i = rt_paths.begin();
+	i != rt_paths.end();
+	++i)
+    {
+	startup_printf("%s[%d]: Candidate RTLib is %s\n", FILE__, __LINE__, i->c_str());
+    }
+    dyninstRT_name = rt_paths[0];
+    return true;
+}
+
 bool PCProcess::setEnvPreload(std::vector<std::string> &envp, std::string fileName) {
     const unsigned int ERROR_CODE = 101;
     bool use_abi_rt = false;
-    (void)fileName; // unused
 
 #if defined(arch_64bit)
     SymtabAPI::Symtab *symt_obj;
@@ -309,32 +337,26 @@ bool PCProcess::setEnvPreload(std::vector<std::string> &envp, std::string fileNa
     use_abi_rt = (symt_obj->getAddressWidth() == 4);
 #endif
 
-    const char *rt_lib_name = getenv("DYNINSTAPI_RT_LIB");
-    if( rt_lib_name == NULL ) {
-        showErrorCallback(ERROR_CODE, std::string("setEnvPreload: DYNINSTAPI_RT_LIB is undefined"));
-        proccontrol_printf("%s[%d]: DYNINSTAPI_RT_LIB is undefined\n");
-        return false;
+    std::vector<std::string> rt_paths;
+    std::string rt_base = "libdyninstAPI_RT";
+    if(use_abi_rt) rt_base += "_m32";
+    rt_base += ".so";
+    if(!BinaryEdit::getResolvedLibraryPath(rt_base, rt_paths) || rt_paths.empty())
+    {
+	startup_printf("%s[%d]: Could not find libdyninstAPI_RT.so in search path\n", FILE__, __LINE__);
+      return false;
     }
-
-    std::string full_name;
-    if (use_abi_rt) {
-        const char *slash = P_strrchr(rt_lib_name, '/');
-        if (!slash)
-            slash = P_strrchr(rt_lib_name, '\\');
-        if (!slash)
-            return false;
-        const char *dot = P_strchr(slash, '.');
-        if (!dot)
-            return false;
-        full_name = std::string(rt_lib_name, dot - rt_lib_name) +
-                    std::string("_m32") +
-                    std::string(dot);
-        rt_lib_name = full_name.c_str();
+    for(auto i = rt_paths.begin();
+	i != rt_paths.end();
+	++i)
+    {
+	startup_printf("%s[%d]: Candidate RTLib is %s\n", FILE__, __LINE__, i->c_str());
     }
+    std::string rt_lib_name = rt_paths[0];
 
     // Check to see if the library given exists.
-    if (access(rt_lib_name, R_OK)) {
-        std::string msg = std::string("Runtime library ") + std::string(rt_lib_name) +
+    if (access(rt_lib_name.c_str(), R_OK)) {
+        std::string msg = std::string("Runtime library ") + rt_lib_name +
                           std::string(" does not exist or cannot be accessed!");
         cerr << msg << endl;
         showErrorCallback(ERROR_CODE, msg);
@@ -357,13 +379,13 @@ bool PCProcess::setEnvPreload(std::vector<std::string> &envp, std::string fileNa
         if (ldPreloadVal == envp.end()) {
             // Not found, append an entry
             std::string ld_preload = std::string(var_name) + std::string("=") +
-                                     std::string(rt_lib_name);
+                                     rt_lib_name;
             startup_printf("LD_PRELOAD=%s\n", ld_preload.c_str());
             envp.push_back(ld_preload);
         } else {
             // Found, modify envs in-place
             std::string ld_preload = *ldPreloadVal + std::string(":") +
-                                     std::string(rt_lib_name);
+                                     rt_lib_name;
             startup_printf("LD_PRELOAD=%s\n", ld_preload.c_str());
             *ldPreloadVal = ld_preload;
         }
@@ -375,7 +397,7 @@ bool PCProcess::setEnvPreload(std::vector<std::string> &envp, std::string fileNa
         while( environ[i] != NULL ) {
             std::string envVar(environ[i]);
             if( envVar.find("LD_PRELOAD=") == 0 ) {
-                ld_preload_orig = environ[i];
+                ld_preload_orig = environ[i]+11;
             }else{
                 envp.push_back(envVar);
             }
@@ -387,11 +409,11 @@ bool PCProcess::setEnvPreload(std::vector<std::string> &envp, std::string fileNa
             // Append to existing var
             ld_preload = std::string(var_name) + std::string("=") +
                          std::string(ld_preload_orig) + std::string(":") +
-                         std::string(rt_lib_name);
+                         rt_lib_name;
         } else {
             // Define a new var
             ld_preload = std::string(var_name) + std::string("=") +
-                         std::string(rt_lib_name);
+                         rt_lib_name;
         }
         envp.push_back(ld_preload);
     }

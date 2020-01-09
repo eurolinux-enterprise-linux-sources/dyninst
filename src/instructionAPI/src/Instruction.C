@@ -28,6 +28,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#define INSIDE_INSTRUCTION_API
 // Needs to be the first include.
 #include "common/src/Types.h"
 
@@ -46,8 +47,8 @@
 #include <set>
 #include <functional>
 
-#define INSIDE_INSTRUCTION_API
 #include "common/src/arch-x86.h"
+#include "version.h"
 
 using namespace std;
 using namespace NS_x86;
@@ -59,9 +60,9 @@ namespace Dyninst
   namespace InstructionAPI
   {
 
-      static const int IAPI_major_version = 8;
-      static const int IAPI_minor_version = 2;
-      static const int IAPI_maintenance_version = 0;
+      static const int IAPI_major_version = DYNINST_MAJOR_VERSION;
+      static const int IAPI_minor_version = DYNINST_MINOR_VERSION;
+      static const int IAPI_maintenance_version = DYNINST_PATCH_VERSION;
 
       void Instruction::version(int& major, int& minor, int& maintenance)
       {
@@ -152,9 +153,6 @@ namespace Dyninst
       arch_decoded_from(o.arch_decoded_from)
     {
         m_Operands = o.m_Operands;
-      //m_Operands.reserve(o.m_Operands.size());
-      //std::copy(o.m_Operands.begin(), o.m_Operands.end(), std::back_inserter(m_Operands));
-      
       m_size = o.m_size;
       if(o.m_size > sizeof(m_RawInsn.small_insn))
       {
@@ -419,7 +417,9 @@ memAccessors.begin()));
         // an implicit write, and that we have decoded the control flow
         // target's full location as the first and only operand.
         // If this is not the case, we'll squawk for the time being...
-        if(getCategory() == c_NoCategory)
+        if(getCategory() == c_NoCategory ||
+                getCategory() == c_CompareInsn ||
+                getCategory() == c_PrefetchInsn)
         {
             return Expression::Ptr();
         }
@@ -440,69 +440,71 @@ memAccessors.begin()));
     
     INSTRUCTION_EXPORT std::string Instruction::format(Address addr) const
     {
-      if(m_Operands.empty())
-      {
-	decodeOperands();
-      }
+        if(m_Operands.empty())
+        {
+	        decodeOperands();
+        }
 
-      std::string retVal = m_InsnOp->format();
-      retVal += " ";
-      std::list<Operand>::const_iterator curOperand;
-      for(curOperand = m_Operands.begin();
-	  curOperand != m_Operands.end();
-	  ++curOperand)
-      {
-          retVal += curOperand->format(getArch(), addr);
-	retVal += ", ";
-      }
-      if(!m_Operands.empty())
-      {
-	// trim trailing ", "
-	retVal.erase(retVal.size() - 2, retVal.size());
-      }
+        std::string retVal = m_InsnOp->format();
+
+        retVal += " ";
+        std::list<Operand>::const_iterator curOperand;
+        for(curOperand = m_Operands.begin();
+	    curOperand != m_Operands.end();
+	    ++curOperand)
+        {
+            retVal += curOperand->format(getArch(), addr);
+	        retVal += ", ";
+        }
+        if(!m_Operands.empty())
+        {
+	        // trim trailing ", "
+	        retVal.erase(retVal.size() - 2, retVal.size());
+        }
 #if defined(DEBUG_READ_WRITE)      
-      std::set<RegisterAST::Ptr> tmp;
-      getReadSet(tmp);
-      cout << "Read set:" << endl;
-      for(std::set<RegisterAST::Ptr>::iterator i = tmp.begin();
-          i != tmp.end();
-         ++i)
-      {
-          cout << (*i)->format() << " ";
-      }
-      cout << endl;
-      tmp.clear();
-      getWriteSet(tmp);
-      cout << "Write set:" << endl;
-      for(std::set<RegisterAST::Ptr>::iterator i = tmp.begin();
-          i != tmp.end();
-          ++i)
-      {
-          cout << (*i)->format() << " ";
-      }
-      cout << endl;
-      std::set<Expression::Ptr> mem;
-      getMemoryReadOperands(mem);
-      cout << "Read mem:" << endl;
-      for(std::set<Expression::Ptr>::iterator i = mem.begin();
+        std::set<RegisterAST::Ptr> tmp;
+        getReadSet(tmp);
+        cout << "Read set:" << endl;
+        for(std::set<RegisterAST::Ptr>::iterator i = tmp.begin();
+            i != tmp.end();
+            ++i)
+        {
+            cout << (*i)->format() << " ";
+        }
+        cout << endl;
+        tmp.clear();
+        getWriteSet(tmp);
+        cout << "Write set:" << endl;
+        for(std::set<RegisterAST::Ptr>::iterator i = tmp.begin();
+            i != tmp.end();
+            ++i)
+        {
+            cout << (*i)->format() << " ";
+        }
+        cout << endl;
+        std::set<Expression::Ptr> mem;
+        getMemoryReadOperands(mem);
+        cout << "Read mem:" << endl;
+        for(std::set<Expression::Ptr>::iterator i = mem.begin();
           i != mem.end();
           ++i)
-      {
-          cout << (*i)->format() << " ";
-      }
-      cout << endl;
-      mem.clear();
-      getMemoryWriteOperands(mem);
-      cout << "Write mem:" << endl;
-      for(std::set<Expression::Ptr>::iterator i = mem.begin();
-          i != mem.end();
-          ++i)
-      {
-          cout << (*i)->format() << " ";
-      }
-      cout << endl;
+        {
+            cout << (*i)->format() << " ";
+        }
+        cout << endl;
+        mem.clear();
+        getMemoryWriteOperands(mem);
+        cout << "Write mem:" << endl;
+        for(std::set<Expression::Ptr>::iterator i = mem.begin();
+            i != mem.end();
+            ++i)
+        {
+            cout << (*i)->format() << " ";
+        }
+        cout << endl;
 #endif // defined(DEBUG_READ_WRITE)
-      return retVal;
+
+        return retVal;
     }
     INSTRUCTION_EXPORT bool Instruction::allowsFallThrough() const
     {
@@ -518,6 +520,26 @@ memAccessors.begin()));
       case e_call:
       case e_syscall:
 	return false;
+          case e_jnb:
+          case e_jb:
+          case e_jb_jnaej_j:
+          case e_jbe:
+          case e_jcxz_jec:
+          case e_jl:
+          case e_jle:
+          case e_jnb_jae_j:
+          case e_jnbe:
+          case e_jnl:
+          case e_jnle:
+          case e_jno:
+          case e_jnp:
+          case e_jns:
+          case e_jnz:
+          case e_jo:
+          case e_jp:
+          case e_js:
+          case e_jz:
+              return true;
       default:
       {
 	decodeOperands();
@@ -559,12 +581,7 @@ memAccessors.begin()));
               ++cft)
           {
              if(cft->isCall)
-             {/*
-                static RegisterAST* thePC = new RegisterAST(MachRegister::getPC(arch_decoded_from));
-		long offset;
-		cft->target->bind(thePC, Result(u32, 0));
-		offset = cft->target->eval().convert<long>();
-                if(offset != (int)(size()))*/
+             {
                 return c_CallInsn;
              }
           }

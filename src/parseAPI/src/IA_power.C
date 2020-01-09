@@ -75,7 +75,7 @@ bool IA_IAPI::isThunk() const {
     return false;
 }
 
-bool IA_IAPI::isTailCall(Function* context, EdgeTypeEnum type, unsigned int) const
+bool IA_IAPI::isTailCall(Function* context, EdgeTypeEnum type, unsigned int, const set<Address>& knownTargets) const
 {
    // Collapse down to "branch" or "fallthrough"
     switch(type) {
@@ -165,7 +165,7 @@ bool IA_IAPI::sliceReturn(ParseAPI::Block* bit, Address ret_addr, ParseAPI::Func
 
   parsing_printf(" sliceReturn ret 0x%lx address 0x%lx func %s addr 0x%lx \n", ret_addr, bit->lastInsnAddr(), func->name().c_str(), func->addr() );
   AST::Ptr pcDef;
-  AssignmentConverter converter(true);
+  AssignmentConverter converter(true, true);
   vector<Assignment::Ptr>::iterator ait;
   vector<Assignment::Ptr> assgns;
   PPCReturnPredicates preds;

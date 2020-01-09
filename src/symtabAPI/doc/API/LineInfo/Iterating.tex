@@ -1,4 +1,4 @@
-\subsection{Iterating over Line Information}\label{LineNoIterating}
+\subsection{Iterating over Line Information}\label{subsec:LineNoIterating}
 The \code{LineInformation} class also provides the ability for iterating over its data (line numbers and their corresponding address ranges). The following example shows how to iterate over the line information for a given module using SymtabAPI.
 
 \begin{lstlisting}
@@ -10,8 +10,8 @@ using namespace SymtabAPI;
 //Module handle for the module
 Module *mod;
 
-//Find the module foo within the object.
-obj->findModule(mod, foo);
+//Find the module \lq foo\rq within the object.
+obj->findModuleByName(mod, "foo");
 
 // Get the Line Information for module foo.
 LineInformation *info = mod->getLineInformation();
