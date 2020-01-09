@@ -227,9 +227,6 @@ bool IA_IAPI::isTailCall(Function * context, EdgeTypeEnum type, unsigned int) co
        case COND_NOT_TAKEN:
        case FALLTHROUGH:
        case CALL_FT:
-	 //          type = FALLTHROUGH;
-	 return false;
-          break;
        default:
           return false;
     }
@@ -251,9 +248,11 @@ bool IA_IAPI::isTailCall(Function * context, EdgeTypeEnum type, unsigned int) co
     else 
        boost::tie(valid, addr) = getFallthrough();
 
+    Function* entry = _obj->findFuncByEntry(_cr, addr);
     if(curInsn()->getCategory() == c_BranchInsn &&
        valid &&
-       _obj->findFuncByEntry(_cr,addr))
+       entry && 
+       entry != context && !context->contains(entry->entry()))
     {
       parsing_printf("\tjump to 0x%lx, TAIL CALL\n", addr);
       tailCalls[type] = true;
@@ -267,9 +266,7 @@ bool IA_IAPI::isTailCall(Function * context, EdgeTypeEnum type, unsigned int) co
         return false;
     }
 
-    if ((curInsn()->getCategory() == c_BranchInsn ||
-         curInsn()->getCategory() == c_CallInsn) &&
-        (type != COND_NOT_TAKEN && type != CALL_FT))
+    if ((curInsn()->getCategory() == c_BranchInsn))
     {
         //std::map<Address, Instruction::Ptr>::const_iterator prevIter =
                 //allInsns.find(current);
@@ -482,6 +479,7 @@ bool IA_IAPI::isFakeCall() const
             {
             case e_push:
                 sign = -1;
+                //FALLTHROUGH
             case e_pop: {
                 int size = insn->getOperand(0).getValue()->size();
                 stackDelta += sign * size;
@@ -490,6 +488,7 @@ bool IA_IAPI::isFakeCall() const
             case e_pusha:
             case e_pushad:
                 sign = -1;
+                //FALLTHROUGH
             case e_popa:
             case e_popad:
                 if (1 == sign) {
@@ -502,6 +501,7 @@ bool IA_IAPI::isFakeCall() const
             case e_pushf:
             case e_pushfd:
                 sign = -1;
+                //FALLTHROUGH
             case e_popf:
             case e_popfd:
                 stackDelta += sign * 4;
@@ -537,6 +537,7 @@ bool IA_IAPI::isFakeCall() const
 
             case e_sub:
                 sign = -1;
+                //FALLTHROUGH
             case e_add: {
                 Operand arg = insn->getOperand(1);
                 Result delta = arg.getValue()->eval();

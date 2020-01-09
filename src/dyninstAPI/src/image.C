@@ -36,7 +36,7 @@
 #include <fstream>
 
 #include "image.h"
-#include "common/h/arch.h"
+#include "common/src/arch.h"
 #include "parRegion.h"
 #include "util.h"
 #include "inst.h"
@@ -44,13 +44,13 @@
 #include "function.h"
 #include "Parsing.h"
 
-#include "common/h/Timer.h"
-#include "common/h/debugOstream.h"
-#include "common/h/pathName.h"
-#include "common/h/MappedFile.h"
+#include "common/src/Timer.h"
+#include "common/src/debugOstream.h"
+#include "common/src/pathName.h"
+#include "common/src/MappedFile.h"
 
 #include "dyninstAPI/h/BPatch_flowGraph.h"
-#include "dynutil/h/util.h"
+#include "common/h/util.h"
 
 #include "symtabAPI/h/Function.h"
 
@@ -62,13 +62,14 @@
 #include <sys/time.h>
 #endif
 
-#if defined( USES_DWARF_DEBUG )
+#if defined( cap_dwarf )
 #include "dwarf.h"
 #include "libdwarf.h"
 #endif
 
 #if defined(i386_unknown_nt4_0)
 #include <dbghelp.h>
+#define snprintf _snprintf
 //#include <cvconst.h>
 #endif
 
@@ -104,7 +105,10 @@ char main_function_names[NUMBER_OF_MAIN_POSSIBILITIES][20] = {
     "tls_cb_0"};
 
 string fileDescriptor::emptyString(string(""));
-fileDescriptor::fileDescriptor() {
+fileDescriptor::fileDescriptor():
+        code_(0), data_(0), dynamic_(0), shared_(false),
+        pid_(0), length_(0), rawPtr_(NULL)
+{
     // This shouldn't be called... must be public for pdvector, though
 }
 
@@ -181,7 +185,7 @@ int codeBytesSeen = 0;
 #include <dataflowAPI/h/SymEval.h>
 #include <dataflowAPI/h/AbslocInterface.h>
 #include <dataflowAPI/h/Absloc.h>
-#include <dynutil/h/DynAST.h>
+#include <common/h/DynAST.h>
 
 namespace {
     /* On PPC GLIBC (32 & 64 bit) the address of main is in a structure
@@ -269,6 +273,29 @@ namespace {
         void * fini_addr;
     };
 
+    void *get_raw_symtab_ptr(Symtab *linkedFile, Address addr)
+    {
+        Region *reg = linkedFile->findEnclosingRegion(addr);
+        if (reg != NULL) {
+            char *data = (char*)reg->getPtrToRawData();
+            data += addr - reg->getMemOffset();
+            return data;
+        }
+        return NULL;
+    }
+
+    Address deref_opd(Symtab *linkedFile, Address addr)
+    {
+        Region *reg = linkedFile->findEnclosingRegion(addr);
+        if (reg && reg->getRegionName() == ".opd") {
+            // opd symbol needing dereference
+            void *data = get_raw_symtab_ptr(linkedFile, addr);
+            if (data)
+                return *(Address*)data;
+        }
+        return addr;
+    }
+
     /*
      * b ends with a call to libc_start_main. We are looking for the
      * value in GR8, which is the address of a structure that contains
@@ -289,6 +316,7 @@ namespace {
             b->end()-b->start(),
             b->region()->getArch());
 
+        RegisterAST::Ptr r2( new RegisterAST(ppc32::r2) );
         RegisterAST::Ptr r8( new RegisterAST(ppc32::r8) );
 
         Address cur_addr = b->start();
@@ -302,49 +330,66 @@ namespace {
         if(!r8_def)
             return 0;
 
-        // Get all of the assignments that happen in this instruction
-        AssignmentConverter conv(true);
-        vector<Assignment::Ptr> assigns;
-        conv.convert(r8_def,r8_def_addr,f,b,assigns);
+        Address ss_addr = 0;
 
-        // find the one we care about (r8)
-        vector<Assignment::Ptr>::iterator ait = assigns.begin();
-        for( ; ait != assigns.end(); ++ait) {
-            AbsRegion & outReg = (*ait)->out();
-            Absloc const& loc = outReg.absloc();
-            if(loc.reg() == r8->getID())
-                break;
-        }
-        if(ait == assigns.end()) {
-            return 0;
-        }
-
-        // Slice back to the definition of R8, and, if possible, simplify
-        // to a constant
-        Slicer slc(*ait,b,f);
-        Default_Predicates preds;
-        Graph::Ptr slg = slc.backwardSlice(preds);
-        DataflowAPI::Result_t sl_res;
-        DataflowAPI::SymEval::expand(slg,sl_res);
-        AST::Ptr calculation = sl_res[*ait];
-        SimpleArithVisitor visit; 
-        AST::Ptr simplified = calculation->accept(&visit);
-        //printf("after simplification:\n%s\n",simplified->format().c_str());
-        if(simplified->getID() == AST::V_ConstantAST) { 
-            ConstantAST::Ptr cp = ConstantAST::convert(simplified);
-            Address ss_addr = cp->val().val;
-
-            // need a pointer to the image data
-            SymtabAPI::Region * dreg = linkedFile->findEnclosingRegion(ss_addr);
-        
-            if(dreg) {
-                struct libc_startup_info * si =
-                    (struct libc_startup_info *)(
-                        ((Address)dreg->getPtrToRawData()) + 
-                        ss_addr - (Address)dreg->getMemOffset());
-                return (Address)si->main_addr;
+        // Try a TOC-based lookup first
+        if (r8_def->isRead(r2)) {
+            set<Expression::Ptr> memReads;
+            r8_def->getMemoryReadOperands(memReads);
+            Address TOC = f->obj()->cs()->getTOC(r8_def_addr);
+            if (TOC != 0 && memReads.size() == 1) {
+                Expression::Ptr expr = *memReads.begin();
+                expr->bind(r2.get(), Result(u64, TOC));
+                const Result &res = expr->eval();
+                if (res.defined) {
+                    void *res_addr =
+                        get_raw_symtab_ptr(linkedFile, res.convert<Address>());
+                    if (res_addr)
+                        ss_addr = *(Address*)res_addr;
+                }
             }
         }
+
+        if (ss_addr == 0) {
+            // Get all of the assignments that happen in this instruction
+            AssignmentConverter conv(true);
+            vector<Assignment::Ptr> assigns;
+            conv.convert(r8_def,r8_def_addr,f,b,assigns);
+
+            // find the one we care about (r8)
+            vector<Assignment::Ptr>::iterator ait = assigns.begin();
+            for( ; ait != assigns.end(); ++ait) {
+                AbsRegion & outReg = (*ait)->out();
+                Absloc const& loc = outReg.absloc();
+                if(loc.reg() == r8->getID())
+                    break;
+            }
+            if(ait == assigns.end()) {
+                return 0;
+            }
+
+            // Slice back to the definition of R8, and, if possible, simplify
+            // to a constant
+            Slicer slc(*ait,b,f);
+            Default_Predicates preds;
+            Graph::Ptr slg = slc.backwardSlice(preds);
+            DataflowAPI::Result_t sl_res;
+            DataflowAPI::SymEval::expand(slg,sl_res);
+            AST::Ptr calculation = sl_res[*ait];
+            SimpleArithVisitor visit; 
+            AST::Ptr simplified = calculation->accept(&visit);
+            //printf("after simplification:\n%s\n",simplified->format().c_str());
+            if(simplified->getID() == AST::V_ConstantAST) { 
+                ConstantAST::Ptr cp = ConstantAST::convert(simplified);
+                ss_addr = cp->val().val;
+            }
+        }
+
+        // need a pointer to the image data
+        auto si = (struct libc_startup_info *)
+            get_raw_symtab_ptr(linkedFile, ss_addr);
+        if (si)
+            return (Address)si->main_addr;
 
         return 0;
     }
@@ -358,10 +403,13 @@ namespace {
  */
 void image::findMain()
 {
-#if defined(ppc32_linux) || defined(ppc32_bgp)
+#if defined(ppc32_linux) || defined(ppc32_bgp) || defined(ppc64_linux)
     using namespace Dyninst::InstructionAPI;
 
-    if(!desc_.isSharedObject())
+    // Only look for main in executables, but do allow position-independent
+    // executables (PIE) which look like shared objects with an INTERP.
+    // (Some strange DSOs also have INTERP, but this is rare.)
+    if(!desc_.isSharedObject() || linkedFile->getInterpreterName() != NULL)
     {
     	bool foundMain = false;
     	bool foundStart = false;
@@ -381,22 +429,21 @@ void image::findMain()
         if (foundText == false) {
             return;
         }
-	
-    	if( !foundMain )
-    	{
-            logLine("No main symbol found: attempting to create symbol for main\n");
-            const unsigned char* p;
-            p = (( const unsigned char * ) eReg->getPtrToRawData());
 
-            Address mainAddress = 0;
+        if( !foundMain )
+        {
+            logLine("No main symbol found: attempting to create symbol for main\n");
+
+            Address eAddr = linkedFile->getEntryOffset();
+            eAddr = deref_opd(linkedFile, eAddr);
 
 	        bool parseInAllLoadableRegions = (BPatch_normalMode != mode_);
 	        SymtabCodeSource scs(linkedFile, filt, parseInAllLoadableRegions);
             CodeObject tco(&scs,NULL,NULL,false);
 
-            tco.parse(eReg->getMemOffset(),false);
+            tco.parse(eAddr,false);
             set<CodeRegion *> regions;
-            scs.findRegions(eReg->getMemOffset(),regions);
+            scs.findRegions(eAddr,regions);
             if(regions.empty()) {
                 // express puzzlement
                 return;
@@ -404,23 +451,31 @@ void image::findMain()
             SymtabCodeRegion * reg = 
                 static_cast<SymtabCodeRegion*>(*regions.begin());
             Function * func = 
-                tco.findFuncByEntry(reg,eReg->getMemOffset());
+                tco.findFuncByEntry(reg,eAddr);
             if(!func) {
                 // again, puzzlement
                 return;
             }
 
+            Block * b = NULL;
             const Function::edgelist & calls = func->callEdges();
-            if(calls.size() != 1) {
+            if (calls.empty()) {
+                // when there are no calls, let's hope the entry block is it
+                b = tco.findBlockByEntry(reg,eAddr);
+            } else if(calls.size() == 1) {
+                Function::edgelist::iterator cit = calls.begin();
+                b = (*cit)->src();
+            } else {
                 startup_printf("%s[%d] _start has unexpected number (%d) of"
                                " call edges, bailing on findMain()\n",
                     FILE__,__LINE__,calls.size());
-                return; 
+                return;
             }
-            Function::edgelist::iterator cit = calls.begin();
-            Block * b = (*cit)->src();
+            if (!b) return;
 
-            mainAddress = evaluate_main_address(linkedFile,func,b);
+            Address mainAddress = evaluate_main_address(linkedFile,func,b);
+            mainAddress = deref_opd(linkedFile, mainAddress);
+
             if(0 == mainAddress || !scs.isValidAddress(mainAddress)) {
                 startup_printf("%s[%d] failed to find main\n",FILE__,__LINE__);
                 return;
@@ -430,8 +485,8 @@ void image::findMain()
             }
            	Symbol *newSym= new Symbol( "main", 
                                             Symbol::ST_FUNCTION,
-                                            Symbol::SL_GLOBAL, 
-                                            Symbol::SV_DEFAULT, 
+                                            Symbol::SL_LOCAL,
+                                            Symbol::SV_INTERNAL,
                                             mainAddress,
                                             linkedFile->getDefaultModule(),
                                             eReg, 
@@ -441,10 +496,12 @@ void image::findMain()
     }
 #elif defined(i386_unknown_linux2_0) \
 || defined(x86_64_unknown_linux2_4) /* Blind duplication - Ray */ \
-|| defined(i386_unknown_solaris2_5) \
 || (defined(os_freebsd) \
     && (defined(arch_x86) || defined(arch_x86_64)))
-    if(!desc_.isSharedObject())
+    // Only look for main in executables, but do allow position-independent
+    // executables (PIE) which look like shared objects with an INTERP.
+    // (Some strange DSOs also have INTERP, but this is rare.)
+    if(!desc_.isSharedObject() || linkedFile->getInterpreterName() != NULL)
     {
     	bool foundMain = false;
     	bool foundStart = false;
@@ -594,8 +651,8 @@ void image::findMain()
             	//logLine( "No static symbol for function main\n" );
                 Symbol *newSym = new Symbol("DYNINST_pltMain", 
                                             Symbol::ST_FUNCTION, 
-                                            Symbol::SL_GLOBAL,
-                                            Symbol::SV_DEFAULT,
+                                            Symbol::SL_LOCAL,
+                                            Symbol::SV_INTERNAL,
                                             mainAddress,
                                             linkedFile->getDefaultModule(),
                                             eReg, 
@@ -606,8 +663,8 @@ void image::findMain()
            {
            	Symbol *newSym= new Symbol( "main", 
                                             Symbol::ST_FUNCTION,
-                                            Symbol::SL_GLOBAL, 
-                                            Symbol::SV_DEFAULT, 
+                                            Symbol::SL_LOCAL,
+                                            Symbol::SV_INTERNAL,
                                             mainAddress,
                                             linkedFile->getDefaultModule(),
                                             eReg, 
@@ -619,8 +676,8 @@ void image::findMain()
     	{
             Symbol *startSym = new Symbol( "_start",
                                            Symbol::ST_FUNCTION,
-                                           Symbol::SL_GLOBAL,
-                                           Symbol::SV_DEFAULT, 
+                                           Symbol::SL_LOCAL,
+                                           Symbol::SV_INTERNAL,
                                            eReg->getMemOffset(),
                                            linkedFile->getDefaultModule(),
                                            eReg,
@@ -635,8 +692,8 @@ void image::findMain()
 	  if (linkedFile->findRegion(finisec,".fini")) {
 	    Symbol *finiSym = new Symbol( "_fini",
 					  Symbol::ST_FUNCTION,
-					  Symbol::SL_GLOBAL, 
-					  Symbol::SV_DEFAULT, 
+					  Symbol::SL_LOCAL,
+					  Symbol::SV_INTERNAL,
 					  finisec->getMemOffset(),
 					  linkedFile->getDefaultModule(),
 					  finisec, 
@@ -657,8 +714,8 @@ void image::findMain()
         {
 	    Symbol *newSym = new Symbol( "_DYNAMIC", 
 					Symbol::ST_OBJECT, 
-                                         Symbol::SL_GLOBAL, 
-                                         Symbol::SV_DEFAULT,
+                                         Symbol::SL_LOCAL,
+                                         Symbol::SV_INTERNAL,
                                          dynamicsec->getMemOffset(), 
                                          linkedFile->getDefaultModule(),
                                          dynamicsec, 
@@ -667,96 +724,6 @@ void image::findMain()
 	}
     }
     
-#elif defined(rs6000_ibm_aix4_1) || defined(rs6000_ibm_aix5_1)
-   
-   bool foundMain = false;
-   vector <SymtabAPI::Function *> funcs;
-   if (linkedFile->findFunctionsByName(funcs, "main") ||
-       linkedFile->findFunctionsByName(funcs, "usla_main"))
-       foundMain = true;
-
-   Region *sec = NULL;
-   bool found = linkedFile->findRegion(sec, ".text"); 	
-
-   if( !foundMain && linkedFile->isExec() && found )
-   {
-       //we havent found a symbol for main therefore we have to parse _start
-       //to find the address of main
-
-       //last two calls in _start are to main and exit
-       //find the end of _start then back up to find the target addresses
-       //for exit and main
-      
-       int c;
-       int calls = 0;
-       Word *code_ptr_ = (Word *) sec->getPtrToRawData();
-       
-       for( c = 0; code_ptr_[ c ] != 0; c++ );
-
-       instruction i;
-       while( c > 0 )
-       {
-           i.setInstruction((codeBuf_t*)(&code_ptr_[ c ]));
-
-           if(IFORM_LK(i) && 
-              ((IFORM_OP(i) == Bop) || (BFORM_OP(i) == BCop) ||
-               ((XLFORM_OP(i) == BCLRop) && 
-                ((XLFORM_XO(i) == 16) || (XLFORM_XO(i) == 528)))))
-           {
-               calls++;
-               if( calls == 2 )
-                   break;
-           }
-           c--;
-       }
-       
-       Offset currAddr = sec->getMemOffset() + c * instruction::size();
-       Offset mainAddr = 0;
-       
-       if( ( IFORM_OP(i) == Bop ) || ( BFORM_OP(i) == BCop ) )
-       {
-           int disp = 0;
-           if(IFORM_OP(i) == Bop)
-           {
-               disp = IFORM_LI(i);
-           }
-           else if(BFORM_OP(i) == BCop)
-           {
-               disp = BFORM_BD(i);
-           }
-
-           disp <<= 2;
-
-           if(IFORM_AA(i))
-           {
-               mainAddr = (Offset)disp;
-           }
-           else
-               mainAddr = (Offset)( currAddr + disp );      
-       }  
-       
-       Symbol *sym = new Symbol( "main", 
-                                 Symbol::ST_FUNCTION,
-                                 Symbol::SL_GLOBAL,
-                                 Symbol::SV_DEFAULT, 
-                                 mainAddr,
-                                 linkedFile->getDefaultModule(),
-                                 sec);
-       linkedFile->addSymbol(sym);
-      
-   
-       //since we are here make up a sym for _start as well
-
-       Symbol *sym1 = new Symbol( "__start", 
-                                  Symbol::ST_FUNCTION,
-                                  Symbol::SL_GLOBAL, 
-                                  Symbol::SV_DEFAULT, 
-                                  sec->getMemOffset(), 
-                                  linkedFile->getDefaultModule(),
-                                  sec);
-       linkedFile->addSymbol(sym1);
-   }
-
 #elif defined(i386_unknown_nt4_0)
 
    if(linkedFile->isExec()) {
@@ -1223,45 +1190,6 @@ void image::analyzeImage() {
 
     obj_->parse();
 
-#if defined(os_aix)
-  {
-  image_parRegion *parReg;
-  int currentSectionNum = 0;
-
-  // Most of the time there will be no parallel regions in an image, so nothing will happen.
-  // If there is a parallel region we examine it individually 
-  for (unsigned i = 0; i < parallelRegions.size(); i++)
-    {
-      parReg = parallelRegions[i];
-      if (parReg == NULL)
-    continue;
-      else
-    {
-      // Every parallel region has the parse_func that contains the
-      //   region associated with it 
-            parse_func * imf = const_cast<parse_func*>(parReg->getAssociatedFunc());
-      
-      // Returns pointers to all potential parse_funcs that correspond
-      //   to what could be the parent OpenMP function for the region 
-      const pdvector<parse_func *> *prettyNames =
-        findFuncVectorByPretty(imf->calcParentFunc(imf, parallelRegions));
-      
-      //There may be more than one (or none) functions with that name, we take the first 
-      // This function gives us all the information about the parallel region by getting
-      // information for the parallel region parent function  
-      if (prettyNames->size() > 0)
-        imf->parseOMP(parReg, (*prettyNames)[0], currentSectionNum);
-      else
-        continue;
-    }
-    }
-  }
-  /**************************/
-  /* END OpenMP Parsing Code */
-  /**************************/
-
-#endif
-
 #if defined(cap_stripped_binaries)
    {
        vector<CodeRegion *>::const_iterator rit = cs_->regions().begin();
@@ -1294,9 +1222,6 @@ void image::analyzeImage() {
 // wraps (in the normal case) the object name and a relocation
 // address (0 for a.out file). On the following platforms, we
 // are handling a special case:
-//   AIX: objects can possibly have a name like /lib/libc.so:shr.o
-//          since libraries are archives
-//        Both text and data sections have a relocation address
 
 
 image::image(fileDescriptor &desc, 
@@ -1304,19 +1229,26 @@ image::image(fileDescriptor &desc,
              BPatch_hybridMode mode, 
              bool parseGaps) :
    desc_(desc),
-   activelyParsing(addrHash4),
+   imageOffset_(0),
+   imageLen_(0),
+   dataOffset_(0),
+   dataLen_(0),
    is_libdyninstRT(false),
    is_a_out(false),
    main_call_addr_(0),
-   nativeCompiler(false),    
+   nativeCompiler(false),
+   linkedFile(NULL),
+#if defined(os_linux) || defined(os_freebsd)
+   archive(NULL),
+#endif
    obj_(NULL),
    cs_(NULL),
    filt(NULL),
    img_fact_(NULL),
    parse_cb_(NULL),
+   cb_arg0_(NULL),
    nextBlockID_(0),
    pltFuncs(NULL),
-   varsByAddr(addrHash4),
    trackNewBlocks_(false),
    refCount(1),
    parseState_(unparsed),
@@ -1324,51 +1256,7 @@ image::image(fileDescriptor &desc,
    mode_(mode),
    arch(Dyninst::Arch_none)
 {
-#if defined(os_aix)
-   archive = NULL;
-   string file = desc_.file().c_str();
-   SymtabAPI::SymtabError serr = SymtabAPI::Not_An_Archive;
-
-   startup_printf("%s[%d]:  opening file %s (or archive)\n", FILE__, __LINE__, file.c_str());
-   if (!SymtabAPI::Archive::openArchive(archive, file))
-   {
-      err = true;
-      if (archive->getLastError() != serr) {
-         startup_printf("%s[%d]:  opened archive\n", FILE__, __LINE__);
-         return;
-      }
-      else
-      {
-         startup_printf("%s[%d]:  opening file (not archive)\n", FILE__, __LINE__);
-         if (!SymtabAPI::Symtab::openFile(linkedFile, file, BPatch_defensiveMode == mode)) 
-         {
-            startup_printf("%s[%d]:  opening file (not archive) failed\n", FILE__, __LINE__);
-            err = true;
-            return;
-         }
-         startup_printf("%s[%d]:  opened file\n", FILE__, __LINE__);
-      }
-   }
-   else
-   {
-      assert (archive);
-      startup_printf("%s[%d]:  getting member\n", FILE__, __LINE__);
-      string member = std::string(desc_.member());
-      if (member == fileDescriptor::emptyString) {
-         fprintf(stderr, "%s[%d]:  WARNING:  not asking for unnamed member\n", FILE__, __LINE__);
-      }
-      else {
-         if (!archive->getMember(linkedFile, member))
-         {
-            startup_printf("%s[%d]:  getting member failed\n", FILE__, __LINE__);
-            err = true;
-            return;
-         }
-         startup_printf("%s[%d]:  got member\n", FILE__, __LINE__);
-      }
-   }
-   startup_printf("%s[%d]:  opened file %s (or archive)\n", FILE__, __LINE__, file.c_str());
-#elif defined(os_linux) || defined(os_freebsd)
+#if defined(os_linux) || defined(os_freebsd)
    string file = desc_.file().c_str();
    if( desc_.member().empty() ) {
        startup_printf("%s[%d]:  opening file %s\n", FILE__, __LINE__, file.c_str());
@@ -1543,10 +1431,6 @@ image::~image()
     if(parse_cb_) delete parse_cb_;
 
     if (linkedFile) { SymtabAPI::Symtab::closeSymtab(linkedFile); }
-#if defined (os_aix)
-    //fprintf(stderr, "%s[%d]:  IMAGE DTOR:  archive = %p\n", FILE__, __LINE__, archive);
-    if (archive) delete archive;
-#endif
 }
 
 bool pdmodule::findFunction( const std::string &name, pdvector<parse_func *> &found ) {
@@ -1676,11 +1560,7 @@ parse_func *image::addFunction(Address functionEntryAddr, const char *fName)
         return NULL;
      }
 
-     if (!func->getSymtabFunction()->addAnnotation(func, ImageFuncUpPtrAnno))
-     {
-        fprintf(stderr, "%s[%d]: failed to add annotation here\n", FILE__, __LINE__);
-        return NULL;
-     }
+     func->getSymtabFunction()->setData((void *) func);
 
      // If this is a Dyninst dynamic heap placeholder, add it to the
      // list of inferior heaps...
@@ -1741,32 +1621,12 @@ pdmodule *image::getOrCreateModule(Module *mod) {
     return pdmod;
 }
 
-namespace {
-    /* 
-     * See ParseAPI::SymtabCodeSource::lookup_region for 
-     * details about this
-     */  
-    CodeRegion * aix_region_hack(set<CodeRegion *> regs,Address addr)
-    {
-        set<CodeRegion*>::iterator rit = regs.begin();
-        for( ; rit != regs.end(); ++rit) {
-            CodeRegion * tmp = *rit;
-            if(tmp->isCode(addr))
-                return tmp;
-        }
-        return *regs.begin();
-    }
-};
-
 
 /*********************************************************************/
 /**** Function lookup (by name or address) routines               ****/
 /****                                                             ****/
 /**** Overlapping region objects MUST NOT use these routines(+)   ****/
 /*********************************************************************/
-/*
- * (+) that is, except on AIX which is just /different/
- */
 
 int
 image::findFuncs(const Address offset, set<Function *> & funcs) {
@@ -1779,16 +1639,11 @@ image::findFuncs(const Address offset, set<Function *> & funcs) {
     else if(cnt == 1)
         return obj_->findFuncs(*match.begin(),offset,funcs);
 
-#if !defined(os_aix)
         fprintf(stderr,"[%s:%d] image::findFuncs(offset) called on "
                        "overlapping-region object\n",
             FILE__,__LINE__);
         assert(0);
         return 0;
-#else
-    CodeRegion * single = aix_region_hack(match,offset);
-    return obj_->findFuncs(single,offset,funcs);
-#endif 
 }
 
 parse_func *image::findFuncByEntry(const Address &entry) {
@@ -1801,16 +1656,11 @@ parse_func *image::findFuncByEntry(const Address &entry) {
     else if(cnt == 1)
         return (parse_func*)obj_->findFuncByEntry(*match.begin(),entry);
 
-#if !defined(os_aix)
     fprintf(stderr,"[%s:%d] image::findFuncByEntry(entry) called on "
                    "overlapping-region object\n",
         FILE__,__LINE__);
     assert(0);
     return 0;
-#else
-    CodeRegion * single = aix_region_hack(match,entry);
-    return (parse_func*)obj_->findFuncByEntry(single,entry);
-#endif 
 }
 
 int 
@@ -1825,16 +1675,11 @@ image::findBlocksByAddr(const Address addr, set<ParseAPI::Block *> & blocks )
     else if(cnt == 1)
         return obj_->findBlocks(*match.begin(),addr,blocks);
 
-#if !defined(os_aix)
         fprintf(stderr,"[%s:%d] image::findBlocks(offset) called on "
                        "overlapping-region object\n",
             FILE__,__LINE__);
         assert(0);
         return 0;
-#else
-    CodeRegion * single = aix_region_hack(match,addr);
-    return obj_->findBlocks(single,addr,blocks);
-#endif
 }
 
 // Return the vector of functions associated with a pretty (demangled) name
@@ -1849,19 +1694,10 @@ const pdvector<parse_func *> *image::findFuncVectorByPretty(const std::string &n
     for(unsigned index=0; index < funcs.size(); index++)
     {
         SymtabAPI::Function *symFunc = funcs[index];
-        parse_func *imf = NULL;
-        
-        if (!symFunc->getAnnotation(imf, ImageFuncUpPtrAnno)) {
-	  // TODO: just create the function here...
-
-           return NULL;
-        }
-        
+        parse_func *imf = static_cast<parse_func *>(symFunc->getData());
         if (imf) {
             res->push_back(imf);
         }
-
-
     }		
     if(res->size())	
 	return res;	    
@@ -1883,11 +1719,7 @@ const pdvector <parse_func *> *image::findFuncVectorByMangled(const std::string 
 
     for(unsigned index=0; index < funcs.size(); index++) {
         SymtabAPI::Function *symFunc = funcs[index];
-        parse_func *imf = NULL;
-        
-        if (!symFunc->getAnnotation(imf, ImageFuncUpPtrAnno)) {
-            return NULL;
-        }
+        parse_func *imf = static_cast<parse_func *>(symFunc->getData());
         
         if (imf) {
             res->push_back(imf);
@@ -2050,7 +1882,7 @@ bool image::getExecCodeRanges(std::vector<std::pair<Address, Address> > &ranges)
 Symbol *image::symbol_info(const std::string& symbol_name) {
    vector< Symbol *> symbols;
    if(!(linkedFile->findSymbol(symbols,symbol_name.c_str(),Symbol::ST_UNKNOWN, SymtabAPI::anyName))) 
-       return false;
+       return NULL;
 
    return symbols[0];
 }
@@ -2066,7 +1898,7 @@ bool image::findSymByPrefix(const std::string &prefix, pdvector<Symbol *> &ret) 
 	return true;	
 }
 
-dictionary_hash<Address, std::string> *image::getPltFuncs()
+std::unordered_map<Address, std::string> *image::getPltFuncs()
 {
    bool result;
    if (pltFuncs)
@@ -2078,7 +1910,7 @@ dictionary_hash<Address, std::string> *image::getPltFuncs()
    if (!result)
       return NULL;
 
-   pltFuncs = new dictionary_hash<Address, std::string>(addrHash);
+   pltFuncs = new std::unordered_map<Address, std::string>;
    assert(pltFuncs);
    for(unsigned k = 0; k < fbt.size(); k++) {
 #if defined(os_vxworks)
@@ -2108,8 +1940,8 @@ void image::getPltFuncs(std::map<Address, std::string> &out)
 image_variable* image::createImageVariable(Offset offset, std::string name, int size, pdmodule *mod)
 {
     // What to do here?
-    if (varsByAddr.defines(offset))
-        return varsByAddr[offset];
+   auto iter = varsByAddr.find(offset);
+   if (iter != varsByAddr.end()) return iter->second;
 
     Variable *sVar = getObject()->createVariable(name, offset, size, mod->mod());
 

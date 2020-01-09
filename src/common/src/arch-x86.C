@@ -38,7 +38,7 @@
 // Note: Unless specified "book" refers to Intel's manual
 
 // This include *must* come first in the file.
-#include "common/h/Types.h"
+#include "common/src/Types.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -50,11 +50,11 @@
 #include "boost/assign/std/vector.hpp"
 #include "boost/assign/std/set.hpp"
 
-#include "common/h/arch-x86.h"
+#include "common/src/arch-x86.h"
 #include "dyn_regs.h"
 
 #if defined(os_vxworks)
-#include "common/h/wtxKludges.h"
+#include "common/src/wtxKludges.h"
 #endif
 
 using namespace std;
@@ -273,7 +273,7 @@ enum {
 #define ST5 { am_reg, x86::ist5 }
 #define ST6 { am_reg, x86::ist6 }
 #define ST7 { am_reg, x86::ist7 }
-#define FPOS 16
+#define FPOS 17
 
 enum {
   fNT=1,   // non-temporal
@@ -365,6 +365,7 @@ COMMON_EXPORT dyn_hash_map<entryID, std::string> entryNames_IAPI = map_list_of
   (e_cmpps, "cmpps")
   (e_cmpsb, "cmpsb")
   (e_cmpsd, "cmpsd")
+  (e_cmpsd_sse, "cmpsd")
   (e_cmpss, "cmpss")
   (e_cmpsw, "cmpsw")
   (e_cmpxch, "cmpxch")
@@ -2788,9 +2789,9 @@ static ia32_entry sseMap[][4] = {
     { e_No_Entry, t_ill, 0, false, { Zz, Zz, Zz }, 0, 0 },
   },
   { /* SSE50 */
-    { e_movmskps, t_done, 0, true, { Gd, Wps, Zz }, 0, s1W2R },
+    { e_movmskps, t_done, 0, true, { Ed, Vps, Zz }, 0, s1W2R },
     { e_No_Entry, t_ill, 0, false, { Zz, Zz, Zz }, 0, 0 },
-    { e_movmskpd, t_done, 0, true, { Gd, Wpd, Zz }, 0, s1W2R },
+    { e_movmskpd, t_done, 0, true, { Ed, Vpd, Zz }, 0, s1W2R },
     { e_No_Entry, t_ill, 0, false, { Zz, Zz, Zz }, 0, 0 },
   },
   { /* SSE51 */
@@ -3049,7 +3050,7 @@ static ia32_entry sseMap[][4] = {
     { e_cmpps, t_done, 0, true, { Vps, Wps, Ib }, 0, s1RW2R3R }, // comparison writes to dest!
     { e_cmpss, t_done, 0, true, { Vss, Wss, Ib }, 0, s1RW2R3R },
     { e_cmppd, t_done, 0, true, { Vpd, Wpd, Ib }, 0, s1RW2R3R },
-    { e_cmpsd, t_done, 0, true, { Vsd, Wsd, Ib }, 0, s1RW2R3R },
+    { e_cmpsd_sse, t_done, 0, true, { Vsd, Wsd, Ib }, 0, s1RW2R3R },
   },
   { /* SSEC4 */
     { e_pinsrw, t_done, 0, true, { Pq, Ed, Ib }, 0, s1RW2R3R },
@@ -4896,7 +4897,7 @@ unsigned int ia32_decode_operands (const ia32_prefixes& pref,
       case am_O: /* operand offset */
         nib += wordSzB * addrSzAttr;
         if(mac) {
-          int offset;
+          int offset = 0;
           switch(addrSzAttr) {
           case 1: // 16-bit offset
               offset = *((const short int*)addr);
@@ -5515,12 +5516,6 @@ bool insn_hasDisp32(unsigned ModRMbyte){
     return (Mod == 0 && RM == 5) || (Mod == 2);
 }
 
-// We keep an array-let that represents various fixed
-// insns
-unsigned char illegalRep[2] = {0x0f, 0x0b};
-unsigned char trapRep[1] = {0xCC};
- 
-
 const char* ia32_entry::name(ia32_locations* loc)
 {
   dyn_hash_map<entryID, string>::const_iterator found = entryNames_IAPI.find(id);
@@ -5581,6 +5576,9 @@ Address get_immediate_operand(instruction *instr)
 
     ia32_decode(IA32_FULL_DECODER,(const unsigned char *)(instr->ptr()),detail);
 
+    if (loc.imm_cnt < 1)
+      return 0;
+
     // now find the immediate value in the locations
     Address immediate = 0;
 
@@ -5598,8 +5596,8 @@ Address get_immediate_operand(instruction *instr)
             immediate = *(const unsigned char*)(instr->ptr()+loc.imm_position[0]);
             break;
         default:
-            fprintf(stderr,"%s[%u]:  invalid immediate size %d in insn\n",
-                FILE__,__LINE__,loc.imm_size[0]);
+//            fprintf(stderr,"%s[%u]:  invalid immediate size %d in insn\n",
+//                FILE__,__LINE__,loc.imm_size[0]);
             break;
     }
 
@@ -5863,8 +5861,8 @@ bool instruction::getUsedRegs(pdvector<int> &regs) {
       if (op.admet == am_O) {
          //The MOD/RM specifies a register that's used
          int regused = loc.modrm_reg;
-         if (loc.address_size == 4) {
-            regused |= loc.rex_r << 4;
+         if (loc.address_size == 4 && loc.rex_r) {
+             regused |= 0x8;
          }
          regs.push_back(regused);
       }
@@ -5969,8 +5967,6 @@ int instruction::getStackDelta()
 bool instruction::isNop() const
 { 
 
-   int displacement_location = 0;
-   int displacement_size = 0;
    if (!(type_ & IS_NOP)) //NOP or LEA
       return false;
 
@@ -6001,7 +5997,7 @@ bool instruction::isNop() const
    if (loc.rex_x) {
       return false;
    }
-   if (loc.rex_r != loc.rex_b) {
+   if ((!loc.rex_r) != (!loc.rex_b)) { // Logical exclusive or
       return false;
    }
 
@@ -6011,8 +6007,6 @@ bool instruction::isNop() const
             return false;
          }
       }
-      displacement_location = loc.disp_position;
-      displacement_size = loc.disp_size;
    }
    
    if (loc.modrm_rm == 4) {

@@ -1,7 +1,7 @@
 // PPC code generation routines for library injection
 
 #include "loadLibrary/codegen.h"
-#include "common/h/arch-power.h"
+#include "common/src/arch-power.h"
 #include <iostream>
 
 
@@ -79,7 +79,7 @@ void Codegen::generatePPC32(Address val, unsigned reg) {
 }
 
 void Codegen::generatePPC64(Address val, unsigned reg) {
-   generatePPC32(val >> 32, reg);
+   generatePPC32((uint64_t)val >> 32, reg);
 
    instruction insn;
    insn.clear();

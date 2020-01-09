@@ -49,7 +49,7 @@ dominatorBB::dominatorBB(BPatch_basicBlock *bb, dominatorCFG *dc) :
    semiDom = this;
    label = this;
    if (bb)
-      dc->map[bb->blockNo()] = this;
+      dc->map_[bb->blockNo()] = this;
 }
 
 dominatorBB::~dominatorBB() 
@@ -154,13 +154,15 @@ int dominatorBB::sdno() {
 }
 
 dominatorCFG::dominatorCFG(BPatch_flowGraph *flowgraph) :
-   map(uiHash),
    fg(flowgraph),
    currentDepthNo(0)
 {
+   //First initialize nullNode since dominatorBB's ctor uses it
+   nullNode = NULL;
    nullNode = new dominatorBB(NULL, this);
    nullNode->ancestor = nullNode->child = nullNode;
    nullNode->size = 0;
+
    //Create a new dominatorBB object for each basic block
    entryBlock = new dominatorBB(NULL, this);
    all_blocks.push_back(entryBlock);
@@ -327,8 +329,9 @@ void dominatorCFG::link(dominatorBB *parent, dominatorBB *block) {
 }
 
 dominatorBB *dominatorCFG::bpatchToDomBB(BPatch_basicBlock *bb) {
-   dominatorBB *dbb = map.get(bb->blockNo());
-   return dbb;
+   auto iter = map_.find(bb->blockNo());
+   if (iter == map_.end()) return NULL;
+   return iter->second;
 }
 
 void dominatorCFG::depthFirstSearch(dominatorBB *v) {

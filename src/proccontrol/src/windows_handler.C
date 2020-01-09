@@ -33,10 +33,10 @@
 #include <numeric>
 
 
-#include "dynutil/h/dyn_regs.h"
-#include "dynutil/h/dyntypes.h"
+#include "common/h/dyn_regs.h"
+#include "common/h/dyntypes.h"
 #include "symtabAPI/h/Symtab.h"
-#include "common/h/pathName.h"
+#include "common/src/pathName.h"
 #include "proccontrol/h/PCErrors.h"
 #include "proccontrol/h/Generator.h"
 #include "proccontrol/h/Event.h"
@@ -53,7 +53,7 @@
 
 #include "proccontrol/src/snippets.h"
 
-#include "common/h/parseauxv.h"
+#include "common/src/parseauxv.h"
 
 #include <sstream>
 #include <iostream>
@@ -140,7 +140,7 @@ Handler::handler_ret_t WindowsHandleNewThr::handleEvent(Event::ptr ev)
 	ProcPool()->condvar()->unlock();
 	assert(thr);
                                         
-   WinEventNewThread::ptr we = boost::shared_dynamic_cast<WinEventNewThread>(ev);
+   WinEventNewThread::ptr we = boost::dynamic_pointer_cast<WinEventNewThread>(ev);
    if(we)
    {
 		pthrd_printf("WinHandleCreateThread handling thread creation for thread %d, handle %x\n",
@@ -339,7 +339,7 @@ Handler::handler_ret_t WindowsHandleSetThreadInfo::handleEvent( Event::ptr ev )
 {
 	windows_thread *thr = static_cast<windows_thread*>(ev->getThread()->llthrd());
                                         
-   WinEventThreadInfo::ptr we = boost::shared_dynamic_cast<WinEventThreadInfo>(ev);
+   WinEventThreadInfo::ptr we = boost::dynamic_pointer_cast<WinEventThreadInfo>(ev);
    if(we)
    {
 	   ProcPool()->rmThread(thr);

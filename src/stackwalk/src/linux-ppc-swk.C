@@ -34,7 +34,7 @@
 #include "stackwalk/h/procstate.h"
 #include "stackwalk/h/framestepper.h"
 #include "stackwalk/src/linuxbsd-swk.h"
-#include "dynutil/h/dyn_regs.h"
+#include "common/h/dyn_regs.h"
 #include <sys/user.h>
 #include <sys/ptrace.h>
 #include <assert.h>
@@ -52,7 +52,7 @@ bool Walker::createDefaultSteppers()
   stepper = new FrameFuncStepper(this);
   result = addStepper(stepper);
   if (!result) {
-    sw_printf("[%s:%u] - Error adding stepper %p\n", __FILE__, __LINE__,
+    sw_printf("[%s:%u] - Error adding stepper %p\n", FILE__, __LINE__,
 	      stepper);
     return false;
   }

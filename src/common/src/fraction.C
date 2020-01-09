@@ -28,8 +28,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "common/h/fraction.h"
-#include "common/h/int64iostream.h"
+#include "common/src/fraction.h"
+#include "common/src/int64iostream.h"
 
 fraction::ostream_fmt fraction::curFmt = sparse;
 
@@ -145,12 +145,12 @@ bool operator>(const fraction &a, const fraction &b) {
   double ax, ay;
   int as;
   getFrSpec(a.getNumer(), a.getDenom(), &ax, &ay, &as);
-  if(as == -1) { ax =- ax; ay =-ay; }
+  if(as == -1) { ax = -ax; ay = -ay; }
 
   double bx, by;
   int bs;
   getFrSpec(b.getNumer(), b.getDenom(), &bx, &by, &bs);
-  if(bs == -1) { bx =- bx; by =-by; }
+  if(bs == -1) { bx = -bx; by = -by; }
   return (ax > bx || (ax == bx && ay > by));
 }
 
@@ -158,12 +158,12 @@ bool operator<(const fraction &a, const fraction &b) {
   double ax, ay;
   int as;
   getFrSpec(a.getNumer(), a.getDenom(), &ax, &ay, &as);
-  if(as == -1) { ax =- ax; ay =-ay; }
+  if(as == -1) { ax = -ax; ay = -ay; }
 
   double bx, by;
   int bs;
   getFrSpec(b.getNumer(), b.getDenom(), &bx, &by, &bs);
-  if(bs == -1) { bx =- bx; by =-by; }
+  if(bs == -1) { bx = -bx; by = -by; }
   return (ax < bx || (ax == bx && ay < by));
 }
 

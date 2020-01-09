@@ -43,6 +43,7 @@
 #include <cerrno>
 #include <cstring>
 
+#include <sys/mman.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include <signal.h>
@@ -52,8 +53,14 @@
 using namespace Dyninst;
 using namespace Dyninst::Stackwalker;
 
+#if defined(WITH_SYMLITE)
 #include "symlite/h/SymLite-elf.h"
+#elif defined(WITH_SYMTAB_API)
 #include "symtabAPI/h/SymtabReader.h"
+#else
+#error "No defined symbol reader"
+#endif
+
 #include "linuxbsd-swk.h"
 
 
@@ -61,8 +68,14 @@ extern int P_gettid();
 
 SymbolReaderFactory *Dyninst::Stackwalker::getDefaultSymbolReader()
 {
+#if defined(WITH_SYMLITE)
    static SymElfFactory symelffact;
    return &symelffact;
+#elif defined(WITH_SYMTAB_API)
+   return SymtabAPI::getSymtabReaderFactory();
+#else
+#error "No defined symbol reader"
+#endif
 }
 
 static void registerLibSpotterSelf(ProcSelf *pself);
@@ -93,7 +106,7 @@ void handle_fault(int /*sig*/) {
       // ProcSelf::readMem.  Restore the SIGSEGV handler, and
       // the faulting instruction should restart after we return.
       fprintf(stderr, "[%s:%u] - Caught segfault that didn't come " \
-              "from stackwalker memory read!", __FILE__, __LINE__);
+              "from stackwalker memory read!", FILE__, __LINE__);
       signal(SIGSEGV, SIG_DFL);
       return;
    }
@@ -108,7 +121,7 @@ bool ProcSelf::readMem(void *dest, Address source, size_t size) {
     reading_memory = true;
     if( sigsetjmp(readmem_jmp, 1) ) {
         sw_printf("[%s:%u] - Caught fault while reading from %lx to %lx\n",
-                __FILE__, __LINE__, source, source + size);
+                FILE__, __LINE__, source, source + size);
         setLastError(err_procread, "Could not read from process");
         return false;
     }
@@ -133,7 +146,7 @@ bool ProcSelf::getThreadIds(std::vector<THR_ID> &threads) {
 
     if( !result ) {
         sw_printf("[%s:%u] - Could not read default thread\n",
-                __FILE__, __LINE__);
+                FILE__, __LINE__);
         return false;
     }
 
@@ -148,10 +161,11 @@ bool ProcSelf::getDefaultThread(THR_ID &default_tid)
     if( tid <= 0 ) {
         const char *sys_err_msg = strerror(errno);
         sw_printf("[%s:%u] - gettid syscall failed with %s\n",
-                __FILE__, __LINE__, sys_err_msg);
-        std::string errmsg("gettid syscall failed with ");
-        errmsg += sys_err_msg;
-        setLastError(err_internal, errmsg.c_str());
+                FILE__, __LINE__, sys_err_msg);
+        // Note, it's illegal to use a string temp for setLastError, so this
+        // just sets a non-specific const message instead.  But P_gettid
+        // should never fail anyway, as even ENOSYS is retried with getpid.
+        setLastError(err_internal, "gettid syscall failed");
         return false;
     }
 
@@ -182,14 +196,14 @@ static void registerLibSpotterSelf(ProcSelf *pself)
    LibraryState *libs = pself->getLibraryTracker();
    if (!libs) {
       sw_printf("[%s:%u] - Not using lib tracker, don't know how "
-                "to get library load address\n", __FILE__, __LINE__);
+                "to get library load address\n", FILE__, __LINE__);
       lib_trap_addr_self_err = true;
       return;
    }   
    lib_trap_addr_self = libs->getLibTrapAddress();
    if (!lib_trap_addr_self) {
       sw_printf("[%s:%u] - Error getting trap address, can't install lib tracker",
-                __FILE__, __LINE__);
+                FILE__, __LINE__);
       lib_trap_addr_self_err = true;
       return;
    }
@@ -199,7 +213,7 @@ static void registerLibSpotterSelf(ProcSelf *pself)
    map_entries *maps = getVMMaps(getpid(), maps_size);
    if (!maps) {
       sw_printf("[%s:%u] - Error reading proc/%d/maps.  Can't install lib tracker",
-                __FILE__, __LINE__, getpid());
+                FILE__, __LINE__, getpid());
       lib_trap_addr_self_err = true;
       return;
    }
@@ -224,7 +238,7 @@ static void registerLibSpotterSelf(ProcSelf *pself)
          if (result == -1) {
             int errnum = errno;
             sw_printf("[%s:%u] - Error setting premissions for page containing %lx. "
-                      "Can't install lib tracker: %s\n", __FILE__, __LINE__, 
+                      "Can't install lib tracker: %s\n", FILE__, __LINE__, 
                       lib_trap_addr_self, strerror(errnum));
             free(maps);
             lib_trap_addr_self_err = true;
@@ -235,7 +249,7 @@ static void registerLibSpotterSelf(ProcSelf *pself)
    free(maps);
    if (!found) {
       sw_printf("[%s:%u] - Couldn't find page containing %lx.  Can't install lib "
-                "tracker.", __FILE__, __LINE__, lib_trap_addr_self);
+                "tracker.", FILE__, __LINE__, lib_trap_addr_self);
       lib_trap_addr_self_err = true;
       return;
    }
@@ -249,7 +263,7 @@ static void registerLibSpotterSelf(ProcSelf *pself)
 
    memcpy((void*) lib_trap_addr_self, trap_buffer, actual_len);   
    sw_printf("[%s:%u] - Successfully install lib tracker at 0x%lx\n",
-            __FILE__, __LINE__, lib_trap_addr_self);
+            FILE__, __LINE__, lib_trap_addr_self);
 }
 #else
 static void registerLibSpotterSelf(ProcSelf *)
@@ -273,12 +287,12 @@ void BottomOfStackStepperImpl::initialize()
    ProcessState *proc = walker->getProcessState();
    assert(proc);
 
-   sw_printf("[%s:%u] - Initializing BottomOfStackStepper\n", __FILE__, __LINE__);
+   sw_printf("[%s:%u] - Initializing BottomOfStackStepper\n", FILE__, __LINE__);
    
    LibraryState *libs = proc->getLibraryTracker();
    if (!libs) {
       sw_printf("[%s:%u] - Error initing StackBottom.  No library state for process.\n",
-                __FILE__, __LINE__);
+                FILE__, __LINE__);
       return;
    }
    SymbolReaderFactory *fact = Walker::getSymbolReader();
@@ -304,11 +318,11 @@ void BottomOfStackStepperImpl::initialize()
             Dyninst::Address end = aout->getSymbolSize(start_sym) + start;
             if (start == end) {
                sw_printf("[%s:%u] - %s symbol has 0 length, using length of %lu\n",
-                       __FILE__, __LINE__, START_FUNC_NAME, START_HEURISTIC_LENGTH);
+                       FILE__, __LINE__, START_FUNC_NAME, START_HEURISTIC_LENGTH);
                end = start + START_HEURISTIC_LENGTH;
             }
             sw_printf("[%s:%u] - Bottom stepper taking %lx to %lx for start\n", 
-                      __FILE__, __LINE__, start, end);
+                      FILE__, __LINE__, start, end);
             ra_stack_tops.push_back(std::pair<Address, Address>(start, end));
          }
       }
@@ -331,7 +345,7 @@ void BottomOfStackStepperImpl::initialize()
                libthread_addr.second;
             Dyninst::Address end = libthread->getSymbolSize(clone_sym) + start;
             sw_printf("[%s:%u] - Bottom stepper taking %lx to %lx for clone\n", 
-                      __FILE__, __LINE__, start, end);
+                      FILE__, __LINE__, start, end);
             ra_stack_tops.push_back(std::pair<Address, Address>(start, end));
          }
          startthread_sym = libthread->getSymbolByName(START_THREAD_FUNC_NAME);
@@ -340,7 +354,7 @@ void BottomOfStackStepperImpl::initialize()
                libthread_addr.second;
             Dyninst::Address end = libthread->getSymbolSize(startthread_sym) + start;
             sw_printf("[%s:%u] - Bottom stepper taking %lx to %lx for start_thread\n", 
-                      __FILE__, __LINE__, start, end);
+                      FILE__, __LINE__, start, end);
             ra_stack_tops.push_back(std::pair<Address, Address>(start, end));
          }
       }

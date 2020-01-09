@@ -138,7 +138,7 @@ public:
     unsigned getMemoryPageSize() const;
 
     typedef ProcControlAPI::Process::mem_perm PCMemPerm;
-    bool getMemoryAccessRights(Address start,  size_t size, PCMemPerm& rights);
+    bool getMemoryAccessRights(Address start,  PCMemPerm& rights);
     bool setMemoryAccessRights(Address start,  size_t size, PCMemPerm  rights);
     void changeMemoryProtections(Address addr, size_t size, PCMemPerm  rights,
                                  bool setShadow);
@@ -348,6 +348,7 @@ protected:
           savedPid_(pcProc->getPid()),
           savedArch_(pcProc->getArchitecture()),
           analysisMode_(analysisMode), 
+          RT_address_cache_addr_(0),
           sync_event_id_addr_(0),
           sync_event_arg1_addr_(0),
           sync_event_arg2_addr_(0),
@@ -356,6 +357,7 @@ protected:
        thread_hash_tids(0),
        thread_hash_indices(0),
        thread_hash_size(0),
+          eventHandler_(NULL),
           eventCount_(0),
           tracedSyscalls_(NULL),
           mt_cache_result_(not_cached),
@@ -386,6 +388,7 @@ protected:
           savedPid_(pcProc->getPid()),
           savedArch_(pcProc->getArchitecture()),
           analysisMode_(analysisMode), 
+          RT_address_cache_addr_(0),
           sync_event_id_addr_(0),
           sync_event_arg1_addr_(0),
           sync_event_arg2_addr_(0),
@@ -394,6 +397,7 @@ protected:
        thread_hash_tids(0),
        thread_hash_indices(0),
        thread_hash_size(0),
+          eventHandler_(NULL),
           eventCount_(0),
           tracedSyscalls_(NULL),
           mt_cache_result_(not_cached),
@@ -599,7 +603,7 @@ protected:
 
     // The same PCEventHandler held by the BPatch layer
     PCEventHandler *eventHandler_;
-    Mutex eventCountLock_;
+    //Mutex<> eventCountLock_;
     int eventCount_;
 
     syscallNotification *tracedSyscalls_;

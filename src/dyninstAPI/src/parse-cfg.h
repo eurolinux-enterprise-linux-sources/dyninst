@@ -34,13 +34,13 @@
 #define IMAGE_FUNC_H
 
 #include <string>
-#include "common/h/Vector.h"
-#include "common/h/Types.h"
-#include "common/h/Pair.h"
-#include "common/h/arch.h" // instruction
+#include "common/src/Vector.h"
+#include "common/src/Types.h"
+#include "common/src/Pair.h"
+#include "common/src/arch.h" // instruction
 #include "codeRange.h"
 #include "parRegion.h"
-#include "common/h/Dictionary.h"
+#include <unordered_map>
 #include "symtabAPI/h/Symbol.h"
 #include "bitArray.h"
 #include "InstructionCache.h"
@@ -265,10 +265,6 @@ class parse_func : public ParseAPI::Function
 
    void *getPtrToInstruction(Address addr) const;
 
-   /*** Debugging output operators ***/
-   ostream & operator<<(ostream &s) const;
-   friend ostream &operator<<(ostream &os, parse_func &f);
-
    /*** misc. accessors ***/
    pdmodule *pdmod() const { return mod_;}
    image *img() const { return image_; }
@@ -308,8 +304,8 @@ class parse_func : public ParseAPI::Function
    bool hasWeirdInsns() { return hasWeirdInsns_; } // true if we stopped the 
                                 // parse at a weird instruction (e.g., arpl)
    void setHasWeirdInsns(bool wi);
-   void setPrevBlocksUnresolvedCF(int newVal) { prevBlocksUnresolvedCF_ = newVal; };
-   int getPrevBlocksUnresolvedCF() const { return prevBlocksUnresolvedCF_; };
+   void setPrevBlocksUnresolvedCF(size_t newVal) { prevBlocksUnresolvedCF_ = newVal; };
+   size_t getPrevBlocksUnresolvedCF() const { return prevBlocksUnresolvedCF_; };
 
 
    // ----------------------------------------------------------------------
@@ -391,7 +387,7 @@ class parse_func : public ParseAPI::Function
 
    bool hasWeirdInsns_;            // true if we stopped the parse at a 
 								           // weird instruction (e.g., arpl)
-   int prevBlocksUnresolvedCF_; // num func blocks when calculated
+   size_t prevBlocksUnresolvedCF_; // num func blocks when calculated
 
    // Some functions are known to be unparesable by name
    bool isInstrumentableByFunctionName();

@@ -39,7 +39,7 @@
 #include "BPatch_point.h"
 #include "function.h"
 #include "debug.h"
-#include "dynutil/h/DynAST.h"
+#include "common/h/DynAST.h"
 #include "dataflowAPI/h/Absloc.h"
 #include "dataflowAPI/h/AbslocInterface.h"
 #include "instructionAPI/h/InstructionDecoder.h"
@@ -129,6 +129,7 @@ bool HybridAnalysisOW::codeChangeCB
 }
 
 HybridAnalysisOW::HybridAnalysisOW(HybridAnalysis *hybrid)
+   : bpatchBeginCB(NULL), bpatchEndCB(NULL)
 {
     hybrid_ = hybrid;
 }
@@ -233,7 +234,7 @@ bool HybridAnalysisOW::removeLoop(owLoop *loop,
         std::vector<BPatch_function*> modFuncs;
         if (writePoint) {
    			cerr << "Calling overwriteAnalysis with point @ " << hex << writePoint->getAddress() << dec << endl;
-            overwriteAnalysis(writePoint,(void*)loop->getID());
+            overwriteAnalysis(writePoint,(void*)(intptr_t)loop->getID());
         } else {
             std::set<BPatch_function *> funcsToInstrument;
             proc()->overwriteAnalysisUpdate(loop->shadowMap,
@@ -536,7 +537,7 @@ void HybridAnalysisOW::owLoop::instrumentLoopWritesWithBoundsCheck()
                           blockWrites->begin(), 
                           blockWrites->end());
         // store block bounds or alter previous entry if blocks are contiguous
-        if (boundsArray[boundsIdx-1] == (*bIter)->getStartAddress()) {
+        if (boundsIdx > 0 && boundsArray[boundsIdx-1] == (*bIter)->getStartAddress()) {
             boundsArray[boundsIdx-1] = (*bIter)->getEndAddress();
         } else {
             if (boundsIdx > 0) {

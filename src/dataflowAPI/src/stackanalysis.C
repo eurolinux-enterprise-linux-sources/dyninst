@@ -144,13 +144,7 @@ void StackAnalysis::summarizeBlocks() {
     for (unsigned j = 0; j < instances.size(); j++) {
       InstructionAPI::Instruction::Ptr insn = instances[j].first;
       Offset &off = instances[j].second;
-      Offset next;
-      if (j < (instances.size() - 1)) {
-		  next = instances[j+1].second;
-      }
-      else {
-		  next = block->end();
-      }
+
       // Fills in insnEffects[off]
       TransferFuncs &xferFuncs = insnEffects[block][off];
 
@@ -212,7 +206,7 @@ void StackAnalysis::fixpoint() {
     }
     else {
         stackanalysis_printf("\t Calculating meet with block [%x-%x]\n", block->start(), block->lastInsnAddr());
-       meetInputs(block, input);
+       meetInputs(block, blockInputs[block], input);
     }
     
     stackanalysis_printf("\t New in meet: %s\n", format(input).c_str());
@@ -254,7 +248,7 @@ void StackAnalysis::summarize() {
 
 	intervals_ = new Intervals();
 
-	Function::blocklist & bs = func->blocks();
+	Function::blocklist bs = func->blocks();
 	Function::blocklist::iterator bit = bs.begin();
 	for( ; bit != bs.end(); ++bit) {
 		Block *block = *bit;
@@ -318,6 +312,7 @@ void StackAnalysis::computeInsnEffects(ParseAPI::Block *block,
     switch (what) {
        case e_push:
           sign = -1;
+          //FALLTHROUGH
        case e_pop:
           handlePushPop(insn, sign, xferFuncs);
           break;
@@ -330,6 +325,7 @@ void StackAnalysis::computeInsnEffects(ParseAPI::Block *block,
 	 break;
        case e_sub:
           sign = -1;
+          //FALLTHROUGH
        case e_add:
           handleAddSub(insn, sign, xferFuncs);
           break;
@@ -338,6 +334,7 @@ void StackAnalysis::computeInsnEffects(ParseAPI::Block *block,
           break;
        case e_pushfd:
           sign = -1;
+          //FALLTHROUGH
        case e_popfd:
           handlePushPopFlags(sign, xferFuncs);
           break;
@@ -380,8 +377,8 @@ StackAnalysis::Height StackAnalysis::getStackCleanAmount(Function *func) {
 
     std::set<Height> returnCleanVals;
 
-    const Function::blocklist &returnBlocks = func->returnBlocks();
-    Function::blocklist::const_iterator rets = returnBlocks.begin();
+    Function::const_blocklist returnBlocks = func->returnBlocks();
+    auto rets = returnBlocks.begin();
     for (; rets != returnBlocks.end(); ++rets) {
          Block *ret = *rets;
          cur = (unsigned char *) ret->region()->getPtrToInstruction(ret->lastInsnAddr());
@@ -416,7 +413,7 @@ StackAnalysis::Height StackAnalysis::getStackCleanAmount(Function *func) {
 }
 
 StackAnalysis::StackAnalysis() :
-   func(NULL), intervals_(NULL) {};
+   func(NULL), intervals_(NULL), word_size(0) {};
    
 
 StackAnalysis::StackAnalysis(Function *f) : func(f),
@@ -627,16 +624,16 @@ void StackAnalysis::handleAddSub(Instruction::Ptr insn, int sign, TransferFuncs 
      // Size is in bytes... 
      switch(res.size()) {
      case 1:
-       delta = sign * (long) res.convert<uint8_t>();
+       delta = sign * res.convert<int8_t>();
        break;
      case 2:
-       delta = sign * (long) res.convert<uint16_t>();
+       delta = sign * res.convert<int16_t>();
        break;
      case 4:
-       delta = sign * (long) res.convert<uint32_t>();
+       delta = sign * res.convert<int32_t>();
        break;
      case 8:
-       delta = sign * (long) res.convert<uint64_t>();
+       delta = sign * res.convert<int64_t>(); 
        break;
      default:
        assert(0);
@@ -931,7 +928,7 @@ StackAnalysis::RegisterState StackAnalysis::getSrcOutputRegs(Edge* e)
 	return blockOutputs[b];
 }
 
-void StackAnalysis::meetInputs(Block *block, RegisterState &input) {
+void StackAnalysis::meetInputs(Block *block, RegisterState& blockInput, RegisterState &input) {
    input.clear();
 
    //Intraproc epred; // ignore calls, returns in edge iteration
@@ -945,7 +942,8 @@ void StackAnalysis::meetInputs(Block *block, RegisterState &input) {
 					 this,
 					 boost::bind(&StackAnalysis::getSrcOutputRegs, this, _1),
 					 boost::ref(input)));
-   
+
+   meet(blockInput, input);
 
 }
 
@@ -1034,7 +1032,7 @@ StackAnalysis::Height StackAnalysis::TransferFunc::apply(const RegisterState &in
 // something that can take further input.
 void StackAnalysis::TransferFunc::accumulate(std::map<MachRegister, TransferFunc> &inputs ) {
    TransferFunc &input = inputs[target];
-   if (input.target.isValid()) assert(input.target = target);
+   if (input.target.isValid()) assert(input.target == target);
    input.target = target; // Default constructed TransferFuncs won't have this
    assert(target.isValid());
 
@@ -1077,7 +1075,8 @@ void StackAnalysis::TransferFunc::accumulate(std::map<MachRegister, TransferFunc
          // be an absolute because that will remove the alias (and vice versa).
          assert(!alias.isAbs());
          input = alias;
-		 assert(input.target.isValid());
+         input.target = target;
+         assert(input.target.isValid());
                    
                  // if the input was also a delta, apply this also 
                  if (isDelta()) {

@@ -27,14 +27,14 @@
  * License along with this library; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
-#include "dynutil/h/SymReader.h"
-#include "dynutil/h/dyntypes.h"
+#include "common/h/SymReader.h"
+#include "common/h/dyntypes.h"
 
-#include "common/h/Types.h"
+#include "common/src/Types.h"
 #if defined(os_linux)
-#include "common/h/linuxKludges.h"
+#include "common/src/linuxKludges.h"
 #elif defined(os_freebsd)
-#include "common/h/freebsdKludges.h"
+#include "common/src/freebsdKludges.h"
 #endif
 
 #include "proccontrol/h/Handler.h"
@@ -58,10 +58,11 @@ int_breakpoint *sysv_process::lib_trap = NULL;
 
 sysv_process::sysv_process(Dyninst::PID p, string e, vector<string> a, vector<string> envp, map<int,int> f) :
    int_process(p, e, a, envp, f),
+   int_libraryTracking(p, e, a, envp, f),
+   breakpoint_addr(0),
    lib_initialized(false),
    procreader(NULL),
    aout(NULL),
-   libtracking(NULL),
    translator_(NULL),
    translator_state(NotReady)
 {
@@ -69,7 +70,8 @@ sysv_process::sysv_process(Dyninst::PID p, string e, vector<string> a, vector<st
 }
 
 sysv_process::sysv_process(Dyninst::PID pid_, int_process *p) :
-   int_process(pid_, p)
+   int_process(pid_, p),
+   int_libraryTracking(pid_, p)
 {
    sysv_process *sp = dynamic_cast<sysv_process *>(p);
    breakpoint_addr = sp->breakpoint_addr;
@@ -85,19 +87,16 @@ sysv_process::sysv_process(Dyninst::PID pid_, int_process *p) :
      // method in a class that inherits from us
      translator_state = Ready;
    }
-   libtracking = NULL;
+   else
+     translator_state = NotReady;
 }
 
 sysv_process::~sysv_process()
 {
-  deleteAddrTranslator();
+   deleteAddrTranslator();
    if (procreader) {
       delete procreader;
       procreader = NULL;
-   }
-   if (libtracking) {
-      delete libtracking;
-      libtracking = NULL;
    }
 }
 
@@ -226,9 +225,8 @@ bool sysv_process::initLibraryMechanism()
    breakpoint_addr = translator()->getLibraryTrapAddrSysV();
    if (track_libraries) {
       pthrd_printf("Installing library breakpoint at %lx\n", breakpoint_addr);
-      bool result = false;
       if (breakpoint_addr) {
-         result = addBreakpoint(breakpoint_addr, lib_trap);
+         addBreakpoint(breakpoint_addr, lib_trap);
       }
    }
 
@@ -367,7 +365,7 @@ bool sysv_process::plat_getInterpreterBase(Address &)
    return false;
 }
 
-bool sysv_process::sysv_setTrackLibraries(bool b, int_breakpoint* &bp, Address &addr, bool &add_bp)
+bool sysv_process::setTrackLibraries(bool b, int_breakpoint* &bp, Address &addr, bool &add_bp)
 {
    if (b == track_libraries) {
       bp = NULL;
@@ -380,17 +378,9 @@ bool sysv_process::sysv_setTrackLibraries(bool b, int_breakpoint* &bp, Address &
    return true;
 }
 
-bool sysv_process::sysv_isTrackingLibraries()
+bool sysv_process::isTrackingLibraries()
 {
    return track_libraries;
-}
-
-LibraryTracking *sysv_process::sysv_getLibraryTracking()
-{
-   if (!libtracking) {
-      libtracking = new LibraryTracking(proc());
-   }
-   return libtracking;
 }
 
 AddressTranslate *sysv_process::translator() {

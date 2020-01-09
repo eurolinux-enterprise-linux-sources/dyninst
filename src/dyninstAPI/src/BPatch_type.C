@@ -233,7 +233,7 @@ BPatch_Vector<BPatch_field *> *BPatch_type::getComponents() const{
     if(fieldlisttype) {
         vector<Field *> *comps = fieldlisttype->getComponents();
     	if(!comps){
-         free(components);
+         delete components;
          return NULL;
     	}    
       for(unsigned i = 0 ; i< comps->size(); i++)
@@ -529,7 +529,7 @@ BPatch_storageClass BPatch_localVar::convertToBPatchStorage(Dyninst::VariableLoc
                                              (loc->mr_reg == Dyninst::FrameBase) ||
                                              (loc->mr_reg == Dyninst::CFA)))
       return BPatch_storageFrameOffset;
-   else if((stClass == storageRegOffset))
+   else if(stClass == storageRegOffset)
       return BPatch_storageRegOffset;
    else {
       assert(0);

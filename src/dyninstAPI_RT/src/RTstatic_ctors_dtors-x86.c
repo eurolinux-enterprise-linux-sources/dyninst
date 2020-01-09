@@ -29,22 +29,13 @@
  */
 
 #if defined(DYNINST_RT_STATIC_LIB)
-void (*DYNINSTctors_addr)(void);
-void (*DYNINSTdtors_addr)(void);
 void *DYNINSTirel_start;
 void *DYNINSTirel_end;
 
-#if defined(MUTATEE64)
-static const unsigned long long CTOR_LIST_TERM = 0x0000000000000000ULL;
-static const unsigned long long CTOR_LIST_START = 0xffffffffffffffffULL;
-static const unsigned long long DTOR_LIST_TERM = 0x0000000000000000ULL;
-static const unsigned long long DTOR_LIST_START = 0xffffffffffffffffULL;
-#else
-static const unsigned CTOR_LIST_TERM = 0x00000000;
-static const unsigned CTOR_LIST_START = 0xffffffff;
-static const unsigned DTOR_LIST_TERM = 0x00000000;
-static const unsigned DTOR_LIST_START = 0xffffffff;
-#endif
+extern void (*DYNINSTctors_begin)(void);
+extern void (*DYNINSTdtors_begin)(void);
+extern void (*DYNINSTctors_end)(void);
+extern void (*DYNINSTdtors_end)(void);
 
 extern void DYNINSTBaseInit();
 
@@ -54,6 +45,10 @@ typedef struct {
   long (*ptr)(void);
 } rela_t;
 
+typedef struct {
+  long *offset;
+  long info;
+} rel_t;
 
 /*
  * When rewritting a static binary, .ctors and .dtors sections of
@@ -67,21 +62,12 @@ typedef struct {
  */
 
 void DYNINSTglobal_ctors_handler() {
-    void (**ctors_array)(void) = &DYNINSTctors_addr;
+    void (**ctor)(void) = &DYNINSTctors_begin;
 
-    // Find end of function pointer list
-    void (**tmp_ptr)(void) = ctors_array;
-    unsigned size = 0;
-    while( *tmp_ptr != ( (void(*)(void))CTOR_LIST_TERM ) ) {
-        size++;
-        tmp_ptr++;
-    }
-
-    // Constructors are called in the reverse order that they are listed
-    tmp_ptr = &ctors_array[size-1]; // skip list end
-    while( *tmp_ptr != ( (void(*)(void))CTOR_LIST_START ) ) {
-        (*tmp_ptr)();
-        tmp_ptr--;
+    while( ctor != ( &DYNINSTctors_end )) {
+	if(*ctor && (*ctor != (void*)-1))
+	    (*ctor)();
+        ctor++;
     }
 
     // This ensures that instrumentation cannot execute until all global
@@ -90,23 +76,36 @@ void DYNINSTglobal_ctors_handler() {
 }
 
 void DYNINSTglobal_dtors_handler() {
-    void (**dtors_array)(void) = &DYNINSTdtors_addr;
+    void (**dtor)(void) = &DYNINSTdtors_begin;
 
     // Destructors are called in the forward order that they are listed
-    void (**tmp_ptr)(void) = &dtors_array[1]; // skip list start
-    while( *tmp_ptr != ( (void(*)(void))DTOR_LIST_TERM ) ) {
-        (*tmp_ptr)();
-        tmp_ptr++;
+    while( dtor != (&DYNINSTdtors_end )) {
+	if(*dtor && (*dtor != (void*)-1))
+	    (*dtor)();
+	dtor++;
     }
 }
 
 void DYNINSTglobal_irel_handler() {
-  rela_t *rel = 0;
-  for (rel = (rela_t *)(&DYNINSTirel_start); rel != (rela_t *)(&DYNINSTirel_end); ++rel) {
-    long result = 0;
-    if (rel->info != 0x25) continue;
-    result = (rel->ptr());
-    *(rel->offset) = result;
+  if (sizeof(long) == 8) {
+    rela_t *rel = 0;
+    for (rel = (rela_t *)(&DYNINSTirel_start); rel != (rela_t *)(&DYNINSTirel_end); ++rel) {
+      long result = 0;
+      if (rel->info != 0x25) continue;
+      result = (rel->ptr());
+      *(rel->offset) = result;
+    }
+  }
+  else {
+    rel_t *rel = 0;
+    for (rel = (rel_t *)(&DYNINSTirel_start); rel != (rel_t *)(&DYNINSTirel_end); ++rel) {
+      long (*ptr)(void) = 0;
+      long result = 0;
+      if (rel->info != 0x2a) continue;
+      ptr = (void*)*(rel->offset);
+      result = ptr();
+      *(rel->offset) = result;
+    }
   }
 }
 

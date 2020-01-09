@@ -36,10 +36,10 @@
 #include <string.h>
 #include <string>
 
-#include "common/h/Types.h"
-#include "common/h/Vector.h"
-#include "common/h/Dictionary.h"
-#include "common/h/Pair.h"
+#include "common/src/Types.h"
+#include "common/src/Vector.h"
+#include <unordered_map>
+#include "common/src/Pair.h"
 
 #include "BPatch_process.h"
 #include "BPatch_edge.h"
@@ -69,11 +69,11 @@ BPatch_flowGraph::BPatch_flowGraph(BPatch_function *func,
 {
   // fill the information of the basic blocks after creating
   // them. The dominator information will also be filled
-  valid = true;
+  isValid_ = valid = true;
 
   if (!createBasicBlocks()) {
     fprintf(stderr, "Failed to make basic blocks!\n");
-    valid = false;
+    isValid_ = valid = false;
     return;
   }
 }

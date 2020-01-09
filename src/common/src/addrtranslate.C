@@ -28,7 +28,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "common/h/addrtranslate.h"
+#include "common/src/addrtranslate.h"
 
 #include <cstdio>
 
@@ -264,7 +264,7 @@ void LoadedLib::setUpPtr(void *v)
 
 #include <stdarg.h>
 
-//#if !defined(os_linux) && !defined(os_solaris)
+//#if !defined(os_linux)
 //This definition is for all the non-System V systems
 Address AddressTranslate::getLibraryTrapAddrSysV()
 {

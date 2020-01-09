@@ -44,7 +44,7 @@
 #include "InstructionDecoder.h"
 #include "Instruction.h"
 
-#include "dynutil/h/DynAST.h"
+#include "common/h/DynAST.h"
 #include "Relocation/CodeMover.h"
 #include "Relocation/Springboard.h"
 #include "Relocation/Transformers/Include.h"
@@ -77,14 +77,19 @@ using PatchAPI::DynRemoveSnipCommand;
 
 AddressSpace::AddressSpace () :
     trapMapping(this),
+    new_func_cb(NULL),
+    new_instp_cb(NULL),
+    heapInitialized_(false),
     useTraps_(true),
     trampGuardBase_(NULL),
     up_ptr_(NULL),
     costAddr_(0),
+    installedSpringboards_(new Relocation::InstalledSpringboards()),
     memEmulator_(NULL),
     emulateMem_(false),
     emulatePC_(false),
-    delayRelocation_(false)
+    delayRelocation_(false),
+    patcher_(NULL)
 {
 #if 0
    // Disabled for now; used by defensive mode
@@ -423,8 +428,7 @@ void AddressSpace::initializeHeap() {
    "block", otherwise returns false
 */
 bool AddressSpace::isInferiorAllocated(Address block) {
-   heapItem *h = NULL;  
-   return heap_.heapActive.find(block, h);
+   return (heap_.heapActive.find(block) != heap_.heapActive.end());
 }
 
 Address AddressSpace::inferiorMallocInternal(unsigned size,
@@ -473,15 +477,14 @@ Address AddressSpace::inferiorMallocInternal(unsigned size,
 void AddressSpace::inferiorFreeInternal(Address block) {
    // find block on active list
    infmalloc_printf("%s[%d]: inferiorFree for block at 0x%lx\n", FILE__, __LINE__, block);
-   heapItem *h = NULL;  
-   if (!heap_.heapActive.find(block, h)) {
-      // We can do this if we're at process teardown.
-      return;
-   }
+
+   auto iter = heap_.heapActive.find(block);
+   if (iter == heap_.heapActive.end()) return;
+   heapItem *h = iter->second;
    assert(h);
-    
+
    // Remove from the active list
-   heap_.heapActive.undef(block);
+   heap_.heapActive.erase(iter);
     
    // Add to the free list
    h->status = HEAPfree;
@@ -515,13 +518,13 @@ bool AddressSpace::inferiorReallocInternal(Address block, unsigned newSize) {
    infmalloc_printf("%s[%d]: inferiorRealloc for block 0x%lx, new size %d\n",
                     FILE__, __LINE__, block, newSize);
 
-   // find block on active list
-   heapItem *h = NULL;  
-   if (!heap_.heapActive.find(block, h)) {
+   auto iter = heap_.heapActive.find(block);
+   if (iter == heap_.heapActive.end()) {
       // We can do this if we're at process teardown.
       infmalloc_printf("%s[%d]: inferiorRealloc unable to find block, returning\n", FILE__, __LINE__);
       return false;
    }
+   heapItem *h = iter->second;
    assert(h);
    infmalloc_printf("%s[%d]: inferiorRealloc found block with addr 0x%lx, length %d\n",
                     FILE__, __LINE__, h->addr, h->length);
@@ -1509,13 +1512,6 @@ func_instance *AddressSpace::findFuncByEntry(Address addr) {
 
 bool AddressSpace::canUseTraps()
 {
-   BinaryEdit *binEdit = dynamic_cast<BinaryEdit *>(this);
-   if (binEdit && binEdit->getMappedObject()->parse_img()->getObject()->isStaticBinary())
-      return false;
-
-   PCProcess *pcProc = dynamic_cast<PCProcess *>(this);
-   if( pcProc ) return useTraps_;
-
 #if !defined(cap_mutatee_traps)
    return false;
 #else
@@ -1739,6 +1735,7 @@ bool AddressSpace::relocateInt(FuncSet::const_iterator begin, FuncSet::const_ite
     return true;
   }
 
+
   // Create a CodeMover covering these functions
   //cerr << "Creating a CodeMover" << endl;
 
@@ -1795,7 +1792,7 @@ bool AddressSpace::relocateInt(FuncSet::const_iterator begin, FuncSet::const_ite
   relocation_cerr << "  Patching in jumps to generated code" << endl;
 
   if (!patchCode(cm, spb)) {
-      cerr << "Error: patching in jumps failed, ret false!" << endl;
+      relocation_cerr << "Error: patching in jumps failed, ret false!" << endl;
     return false;
   }
 
@@ -1922,7 +1919,6 @@ Address AddressSpace::generateCode(CodeMover::Ptr cm, Address nearTo) {
   //     inferiorFree(addr)
   // In effect, we keep trying until we get a code generation that fits
   // in the space we have allocated.
-
   Address baseAddr = 0;
 
   codeGen genTemplate;
@@ -1989,7 +1985,7 @@ bool AddressSpace::patchCode(CodeMover::Ptr cm,
   std::list<codeGen> patches;
 
   if (!spb->generate(patches, p)) {
-      cerr << "Failed springboard generation, ret false" << endl;
+      springboard_cerr << "Failed springboard generation, ret false" << endl;
     return false;
   }
 
@@ -1997,11 +1993,12 @@ bool AddressSpace::patchCode(CodeMover::Ptr cm,
   for (std::list<codeGen>::iterator iter = patches.begin();
        iter != patches.end(); ++iter) 
   {
-      //relocation_cerr << "Writing springboard @ " << hex << iter->startAddr() << endl;
+      springboard_cerr << "Writing springboard @ " << hex << iter->startAddr() << endl;
       if (!writeTextSpace((void *)iter->startAddr(),
           iter->used(),
           iter->start_ptr())) 
       {
+	springboard_cerr << "\t FAILED to write springboard @ " << hex << iter->startAddr() << endl;
          // HACK: code modification will make this happen...
          return false;
       }
@@ -2137,7 +2134,8 @@ void AddressSpace::addDefensivePad(block_instance *callBlock, func_instance *cal
   // as they are invariant. 
    instPoint *point = instPoint::preCall(callFunc, callBlock);
    if (!point) {
-      cerr << "Error: no preCall point for " << callBlock->long_format() << endl;
+      mal_printf("Error: no preCall point for %s\n",
+                 callBlock->long_format().c_str());
       return;
    }
 

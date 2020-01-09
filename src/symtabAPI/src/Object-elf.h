@@ -37,17 +37,17 @@
 #if !defined(_Object_elf_h_)
 #define _Object_elf_h_
 
-#if defined(USES_DWARF_DEBUG)
+#if defined(cap_dwarf)
 //#include "dwarf.h"
 #include "libdwarf.h"
 #include "dwarf/h/dwarfHandle.h"
 #endif
 
 #include<vector>
-#include "common/h/headers.h"
-#include "common/h/Types.h"
-#include "common/h/MappedFile.h"
-#include "common/h/IntervalTree.h"
+#include "common/src/headers.h"
+#include "common/src/Types.h"
+#include "common/src/MappedFile.h"
+#include "common/src/IntervalTree.h"
 
 #if 0
 #include "symtabAPI/h/Symbol.h"
@@ -297,15 +297,14 @@ class emitElf64;
 class Object : public AObject {
   friend class emitElf;
   friend class emitElf64;
- public:
-  Object() {}
-  Object(MappedFile *, bool, void (*)(const char *) = log_msg, bool alloc_syms = true);
-  Object(MappedFile *, dyn_hash_map<std::string, LineInformation> &, std::vector<Region *> &, void (*)(const char *) = log_msg);
-  Object(MappedFile *, std::string &member_name, Offset offset,	
-          void (*)(const char *) = log_msg, void *base = NULL, bool alloc_syms = true);
+
+  // declared but not implemented; no copying allowed
   Object(const Object &);
+  const Object& operator=(const Object &);
+
+ public:
+  Object(MappedFile *, bool, void (*)(const char *) = log_msg, bool alloc_syms = true);
   virtual ~Object();
-  //const Object& operator=(const Object &);
 
   bool emitDriver(Symtab *obj, std::string fName, std::vector<Symbol *>&allSymbols, unsigned flag);  
   
@@ -313,7 +312,7 @@ class Object : public AObject {
   bool hasStabInfo() const { return ! ( !stab_off_ || !stab_size_ || !stabstr_off_ ); }
   bool hasDwarfInfo() const { return dwarvenDebugInfo; }
   stab_entry * get_stab_info() const;
-  const char * getFileName() const { return mf->filename().c_str(); }
+  std::string getFileName() const;
   void getModuleLanguageInfo(dyn_hash_map<std::string, supportedLanguages> *mod_langs);
   void parseFileLineInfo(Symtab *obj, dyn_hash_map<std::string, LineInformation> &li);
   void parseTypeInfo(Symtab *obj);
@@ -599,7 +598,7 @@ class Object : public AObject {
                          Address textaddr, Address dataaddr,
                          std::vector<ExceptionBlock> &catch_addrs);
 
-#if defined(USES_DWARF_DEBUG)
+#if defined(cap_dwarf)
   std::string find_symbol(std::string name); 
   bool fixSymbolsInModule(Dwarf_Debug dbg, std::string & moduleName, Dwarf_Die dieEntry);
   unsigned fixSymbolsInModuleByRange(IntervalTree<Dwarf_Addr, std::string> &module_ranges);
@@ -620,6 +619,9 @@ class Object : public AObject {
  public:  
   std::set<std::string> prereq_libs;
   std::vector<std::pair<long, long> > new_dynamic_entries;
+ private:
+  const char* soname_;
+  
 };
 
 //const char *pdelf_get_shnames(Elf *elfp, bool is64);

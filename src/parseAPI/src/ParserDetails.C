@@ -105,18 +105,12 @@ static void
 getBlockInsns(Block &blk, std::set<Address> &addrs)
 {
     unsigned bufSize = blk.size();
-#if defined(cap_instruction_api)
     using namespace InstructionAPI;
     const unsigned char* bufferBegin = (const unsigned char *)
         (blk.obj()->cs()->getPtrToInstruction(blk.start()));
     InstructionDecoder dec = InstructionDecoder
         (bufferBegin, bufSize, blk.region()->getArch());
     InstructionAdapter_t ah(dec, blk.start(), blk.obj(), blk.region(), blk.obj()->cs(), &blk);
-#else        
-    InstrucIter iter(blk.start(), bufSize, blk.obj()->cs());
-    InstructionAdapter_t ah(iter, 
-        blk.obj(), blk.region(), obj()->cs());
-#endif
 
 	for (; ah.getAddr() < blk.end(); ah.advance()) {
         addrs.insert(ah.getAddr());
@@ -201,10 +195,10 @@ Parser::getTamperAbsFrame(Function *tamperFunc)
     }
         
     // make a temp edge
-    const Function::blocklist & ret_blks = tamperFunc->returnBlocks();
-    for (Function::blocklist::const_iterator bit = ret_blks.begin(); 
+    Function::const_blocklist ret_blks = tamperFunc->returnBlocks();
+    for (auto bit = ret_blks.begin(); 
          bit != ret_blks.end(); 
-         bit++)
+         ++bit)
     {
         Edge *edge = link_tempsink(*bit, CALL);
 
@@ -519,7 +513,7 @@ void Parser::ProcessCFInsn(
             if(curEdge->second != NOEDGE || !dynamic_call) {
                 has_unres = true;
                 resolvable_edge = false;
-                if (curEdge->second != -1 && _obj.defensiveMode()) 
+                if ((int)curEdge->second != -1 && _obj.defensiveMode()) 
                     mal_printf("bad edge target at %lx type %d\n",
                                curEdge->first, curEdge->second);
             }

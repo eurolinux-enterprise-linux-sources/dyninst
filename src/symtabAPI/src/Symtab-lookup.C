@@ -39,10 +39,10 @@
 #include <vector>
 #include <algorithm>
 
-#include "common/h/Timer.h"
-#include "common/h/debugOstream.h"
-#include "common/h/serialize.h"
-#include "common/h/pathName.h"
+#include "common/src/Timer.h"
+#include "common/src/debugOstream.h"
+#include "common/src/serialize.h"
+#include "common/src/pathName.h"
 
 #include "Serialization.h"
 #include "Symtab.h"
@@ -657,6 +657,83 @@ struct Dyninst::SymtabAPI::SymbolCompareByAddr
     }
 };
 
+
+bool Symtab::addFunctionRange(FunctionBase *func, Dyninst::Offset next_start)
+{
+   Dyninst::Offset sym_low, sym_high;
+   bool found_sym_range = false;
+
+   sym_low = func->getOffset();
+   if (func->getSize())
+      sym_high = sym_low + func->getSize();
+   else if (next_start) {
+      sym_high = next_start;
+   }
+   else {
+      //Inlined symbol, no real way to get size estimates.  Have to rely 
+      // on debug info.
+      sym_low = sym_high = 0;
+   }
+   
+   //Add dwarf/debug info ranges to func_lookup
+   FuncRangeCollection &ranges = const_cast<FuncRangeCollection &>(func->getRanges());
+   for (FuncRangeCollection::iterator i = ranges.begin(); i != ranges.end(); i++) {
+      FuncRange &range = *i;
+      if (range.low() == sym_low && range.high() == sym_high)
+         found_sym_range = true;
+      func_lookup->insert(&range);
+   }
+
+   //Add symbol range to func_lookup, if present and not already added
+   if (!found_sym_range && sym_low && sym_high) {
+      FuncRange *frange = new FuncRange(sym_low, sym_high - sym_low, func);
+      func_lookup->insert(frange);
+   }
+
+   //Recursively add inlined functions
+   const InlineCollection &inlines = func->getInlines();
+   for (InlineCollection::const_iterator i = inlines.begin(); i != inlines.end(); i++) {
+      addFunctionRange(*i, 0);
+   }
+   return true;
+}
+
+bool Symtab::parseFunctionRanges()
+{
+   parseTypesNow();
+   assert(!func_lookup);
+   func_lookup = new FuncRangeLookup();
+
+   if (everyFunction.size() && !sorted_everyFunction)
+   {
+      std::sort(everyFunction.begin(), everyFunction.end(),
+                SymbolCompareByAddr());
+      sorted_everyFunction = true;
+   }
+
+   for (vector<Function *>::iterator i = everyFunction.begin(); i != everyFunction.end(); i++) {
+
+      //Compute the start of the next function, if any.  Use region end if no
+      // next function.
+      vector<Function *>::iterator next = i+1;
+      Address next_addr = 0;
+      if (next != everyFunction.end()) {
+         next_addr = (*next)->getOffset();
+      }
+      else {
+         Region *region = findEnclosingRegion((*i)->getOffset());
+         if (region) {
+            next_addr = region->getMemOffset() + region->getMemSize(); 
+         }
+      }
+
+      //Add current function to lookups.
+      addFunctionRange(*i, next_addr);
+   }
+
+   return true;
+}
+
 bool Symtab::getContainingFunction(Offset offset, Function* &func)
 {
    if (!isCode(offset)) {
@@ -673,6 +750,7 @@ bool Symtab::getContainingFunction(Offset offset, Function* &func)
    unsigned high = everyFunction.size();
    unsigned last_mid = high+1;
    unsigned mid;
+   
    if (!high) return false;
    for (;;)
    {
@@ -694,15 +772,49 @@ bool Symtab::getContainingFunction(Offset offset, Function* &func)
          return true;
       }
    }
-
    if ((everyFunction[low]->getOffset() <= offset) &&
        ((low+1 == everyFunction.size()) || 
         (everyFunction[low+1]->getOffset() > offset)))
    {
-         func = everyFunction[low];
-         return true;
+      func = everyFunction[low];
+      return true;
    }
-   return false;
+   return false;      
+}
+
+bool Symtab::getContainingInlinedFunction(Offset offset, FunctionBase* &func)
+{
+   if (!func_lookup)
+      parseFunctionRanges();
+   assert(func_lookup);
+   
+   set<FuncRange *> ranges;
+   int num_found = func_lookup->find(offset, ranges);
+   if (num_found == 0) {
+      func = NULL;
+      return false;
+   }
+   if (num_found == 1) {
+      func = (*ranges.begin())->container;
+      return true;
+   }
+
+   //Find the lowest (most inlined) entry in an inline chain if we
+   // get overlapping functions.
+   func = (*ranges.begin())->container;
+   for (set<FuncRange *>::iterator i = ++ranges.begin(); i != ranges.end(); i++) {
+      FunctionBase *cur_func = (*i)->container;
+      while (cur_func) {
+         if (cur_func == func) {
+            //We found func higher on the inline chain that i,
+            // use i as the function to return.
+            func = (*i)->container;
+            break;
+         }
+         cur_func = cur_func->getInlinedParent();
+      }
+   }
+   return true;
 }
 
 Module *Symtab::getDefaultModule() {

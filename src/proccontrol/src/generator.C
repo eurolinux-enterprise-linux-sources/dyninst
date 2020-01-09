@@ -34,7 +34,7 @@
 #include "proccontrol/src/int_process.h"
 #include "proccontrol/src/procpool.h"
 
-#include "common/h/dthread.h"
+#include "common/src/dthread.h"
 
 #include <assert.h>
 #include <iostream>
@@ -42,7 +42,7 @@
 using namespace std;
 
 std::set<Generator::gen_cb_func_t> Generator::CBs;
-Mutex *Generator::cb_lock;
+Mutex<> *Generator::cb_lock;
 
 bool Generator::startedAnyGenerator = false;
 
@@ -67,10 +67,11 @@ int_cleanup::~int_cleanup() {
 
 Generator::Generator(std::string name_) :
    state(none),
+   m_Event(NULL),
    name(name_),
    eventBlock_(false)
 {
-   if (!cb_lock) cb_lock = new Mutex();
+   if (!cb_lock) cb_lock = new Mutex<>();
    startedAnyGenerator = true;
 }
 
@@ -95,7 +96,7 @@ void Generator::stopDefaultGenerator() {
 
 void Generator::registerNewEventCB(void (*func)())
 {
-   if (!cb_lock) cb_lock = new Mutex();
+   if (!cb_lock) cb_lock = new Mutex<>();
    Generator::cb_lock->lock();
    CBs.insert(func);
    Generator::cb_lock->unlock();
@@ -103,7 +104,7 @@ void Generator::registerNewEventCB(void (*func)())
 
 void Generator::removeNewEventCB(void (*func)())
 {
-   if (!cb_lock) cb_lock = new Mutex();
+   if (!cb_lock) cb_lock = new Mutex<>();
    Generator::cb_lock->lock();
    std::set<gen_cb_func_t>::iterator i = CBs.find(func);
    if (i != CBs.end())
@@ -121,7 +122,7 @@ bool Generator::isExitingState()
 #endif
 #define STR_CASE(X) case Generator::X: return #X
 
-static const char *generatorStateStr(Generator::state_t s) {
+const char * Generator::generatorStateStr(Generator::state_t s) {
    switch (s) {
       STR_CASE(none);
       STR_CASE(initializing);
@@ -314,7 +315,7 @@ struct GeneratorMTInternals
    GeneratorMTInternals() {}
 
    //Start-up synchronization
-   CondVar init_cond;
+   CondVar<> init_cond;
 
    DThread thrd;
 };

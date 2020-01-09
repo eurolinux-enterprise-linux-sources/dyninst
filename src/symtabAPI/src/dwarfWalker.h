@@ -22,6 +22,7 @@ namespace SymtabAPI {
    class Module;
    class Object;
    class Function;
+   class FunctionBase;
    class typeCommon;
    class typeEnum;
    class fieldListType;
@@ -34,7 +35,7 @@ class DwarfWalker {
 
    struct Contexts {
       struct Context {
-         Function *func;
+         FunctionBase *func;
          typeCommon *commonBlock;
          typeEnum *enumType;
          fieldListType *enclosure;
@@ -51,13 +52,14 @@ class DwarfWalker {
             func(NULL), commonBlock(NULL),
             enumType(NULL), enclosure(NULL),
             parseSibling(true), parseChild(true), 
-            base(0) {};
+            entry(NULL), specEntry(NULL), abstractEntry(NULL),
+            offset(0), tag(0), base(0) {};
       };
       
       std::stack<Context> c;
       void push();
       void pop();
-      Function *curFunc() { return c.top().func; }
+      FunctionBase *curFunc() { return c.top().func; }
       typeCommon * curCommon() { return c.top().commonBlock; }
       typeEnum *curEnum() { return c.top().enumType; }
       fieldListType *curEnclosure() { return c.top().enclosure; }
@@ -71,7 +73,7 @@ class DwarfWalker {
       Address base() { return c.top().base; }
       range_set_ptr ranges() { return c.top().ranges; }
 
-      void setFunc(Function *f); 
+      void setFunc(FunctionBase *f); 
       void setCommon(typeCommon *tc) { c.top().commonBlock = tc; }
       void setEnum(typeEnum *e) { c.top().enumType = e; }
       void setEnclosure(fieldListType *f) { c.top().enclosure = f; }
@@ -84,6 +86,8 @@ class DwarfWalker {
       void setTag(Dwarf_Tag t) { c.top().tag = t; }
       void setBase(Address a) { c.top().base = a; }
       void setRange(std::pair<Address, Address> range) { 
+         if (range.first >= range.second)
+            return;
          if (!c.top().ranges)
             c.top().ranges = range_set_ptr(new std::vector<std::pair<Address, Address> >);
          c.top().ranges->push_back(range);
@@ -92,6 +96,12 @@ class DwarfWalker {
          c.top().ranges = range_set_ptr();
       }
       void clearFunc();
+   };
+
+   struct ContextGuard {
+     Contexts& c;
+     ContextGuard(Contexts& c): c(c) { c.push(); }
+     ~ContextGuard() { c.pop(); }
    };
 
   public:
@@ -112,15 +122,21 @@ class DwarfWalker {
               Address lowpc);
 
    // Takes current debug state as represented by dbg_;
-   bool parseModule(Module *&fixUnknownMod);
+   bool parseModule(Dwarf_Bool is_info, Module *&fixUnknownMod);
    
    // Non-recursive version of parse
    // A Context must be provided as an _input_ to this function,
    // whereas parse creates a context.
    bool parse_int(Dwarf_Die entry, bool parseSiblings);
 
-   bool parseSubprogram();
+   enum inline_t {
+      NormalFunc,
+      InlinedFunc
+   };
+
+   bool parseSubprogram(inline_t func_type);
    bool parseLexicalBlock();
+   bool parseRangeTypes();
    bool parseCommonBlock();
    bool parseConstant();
    bool parseVariable();
@@ -136,20 +152,24 @@ class DwarfWalker {
    bool parseMember();
    bool parseConstPackedVolatile();
    bool parseTypeReferences();
+   bool parseHighPCLowPC();
+   
 
    // These vary as we parse the tree
-   Function *curFunc() { return contexts_.curFunc(); }
+   FunctionBase *curFunc() { return contexts_.curFunc(); }
    typeCommon *curCommon() { return contexts_.curCommon(); }
    typeEnum *curEnum() { return contexts_.curEnum(); }
    fieldListType *curEnclosure() { return contexts_.curEnclosure(); }
 
-   void setFunc(Function *f) { contexts_.setFunc(f); }
+   void setFunc(FunctionBase *f) { contexts_.setFunc(f); }
    void setCommon(typeCommon *c) { contexts_.setCommon(c); }
    void setEnum(typeEnum *e) { contexts_.setEnum(e); }
    void setEnclosure(fieldListType *f) { contexts_.setEnclosure(f); }
 
    // This is a handy scratch space that is cleared for each parse. 
    std::string &curName() { return name_; }
+   bool isMangledName() { return is_mangled_name_; }
+   void setMangledName(bool b) { is_mangled_name_ = b; }
    bool nameDefined() { return name_ != ""; }
    // These are invariant across a parse
    Object *obj(); 
@@ -175,6 +195,7 @@ class DwarfWalker {
    Dwarf_Die abstractEntry() { return contexts_.abstractEntry(); }
    void clearRanges() { contexts_.clearRanges(); }
    bool hasRanges() { return contexts_.ranges() != NULL; }
+   size_t rangesSize() { return contexts_.ranges()->size(); }
    range_set_t::iterator ranges_begin() { return contexts_.ranges()->begin(); }
    range_set_t::iterator ranges_end() { return contexts_.ranges()->end(); }
 
@@ -188,6 +209,7 @@ class DwarfWalker {
    void setOffset(Dwarf_Off offset) { contexts_.setOffset(offset); }
    void setRange(std::pair<Address, Address> range) { contexts_.setRange(range); }
 
+   bool parseCallsite();
    bool buildSrcFiles(Dwarf_Die entry);
    bool hasDeclaration(bool &decl);
    bool findTag();
@@ -195,15 +217,19 @@ class DwarfWalker {
    bool handleAbstractOrigin(bool &isAbstractOrigin);
    bool handleSpecification(bool &hasSpec);
    bool findFuncName();
-   bool findFunction(bool &found);
    bool findBaseAddr();
+   bool setFunctionFromRange(inline_t func_type);
    bool getFrameBase();
    bool getReturnType(bool hasSpecification, Type *&returnType);
    bool addFuncToContainer(Type *returnType);
    bool findType(Type *&, bool defaultToVoid);
+   bool findAnyType(Dwarf_Attribute typeAttribute,
+                    Dwarf_Bool is_info, Type *&type);
+   bool findDieOffset(Dwarf_Attribute attr, Dwarf_Off &offset);
    bool getLineInformation(Dwarf_Unsigned &variableLineNo,
                            bool &hasLineNumber,
                            std::string &filename); 
+   bool findDieName(Dwarf_Die die, std::string &);
    bool findName(std::string &);
    void removeFortranUnderscore(std::string &);
    bool findSize(unsigned &size);
@@ -223,6 +249,7 @@ class DwarfWalker {
 			       bool &constant,
 			       bool &expr,
 			       Dwarf_Half &form);
+   bool findString(Dwarf_Half attr, std::string &str);
    bool findConstant(Dwarf_Half attr, Address &value);
    bool findConstantWithForm(Dwarf_Attribute &attr,
                                Dwarf_Half form,
@@ -233,7 +260,8 @@ class DwarfWalker {
                                           std::vector<VariableLocation> &locs);
    typeArray *parseMultiDimensionalArray(Dwarf_Die firstRange,
                                          Type *elementType);
-   bool decipherBound(Dwarf_Attribute boundAttribute, std::string &name);
+   bool decipherBound(Dwarf_Attribute boundAttribute, Dwarf_Bool is_info,
+                      std::string &name);
 
    bool decodeExpression(Dwarf_Attribute &attr,
 			 std::vector<VariableLocation> &locs);
@@ -251,11 +279,8 @@ class DwarfWalker {
    // to handle a bug where they don't finish off functions. 
    void clearFunc() { contexts_.clearFunc(); }
 
-   // Track which enclosure (array, struct, class, etc.) contains the current
-   // dwarf parsee
-   std::map<Dwarf_Off, fieldListType *> enclosureMap;
    // Header-only functions get multiple parsed.
-   std::set<Function *> parsedFuncs;
+   std::set<FunctionBase *> parsedFuncs;
    
    Contexts contexts_;
 
@@ -266,6 +291,7 @@ class DwarfWalker {
    typeCollection *tc_;
 
    std::string name_;
+   bool is_mangled_name_;
 
    // Per-module info
    Address modLow;
@@ -284,6 +310,18 @@ class DwarfWalker {
    // we need to subtract a "header overall offset". 
    Dwarf_Off compile_offset;
 
+   // Type IDs are just int, but Dwarf_Off is 64-bit and may be relative to
+   // either .debug_info or .debug_types.
+   dyn_hash_map<Dwarf_Off, typeId_t> info_type_ids_; // .debug_info offset -> id
+   dyn_hash_map<Dwarf_Off, typeId_t> types_type_ids_; // .debug_types offset -> id
+   typeId_t get_type_id(Dwarf_Off offset, bool is_info);
+   typeId_t type_id(); // get_type_id() for the current entry
+
+   // Map to connect DW_FORM_ref_sig8 to type IDs.
+   dyn_hash_map<uint64_t, typeId_t> sig8_type_ids_;
+   bool parseModuleSig8(Dwarf_Bool is_info);
+   void findAllSig8Types();
+   bool findSig8Type(Dwarf_Sig8 *signature, Type *&type);
 };
 
 };

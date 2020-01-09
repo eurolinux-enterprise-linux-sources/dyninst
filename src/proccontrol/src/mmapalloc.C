@@ -28,7 +28,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "common/h/Types.h"
+#include "common/src/Types.h"
 #include "mmapalloc.h"
 #include <sys/mman.h>
 #include <string.h>
@@ -326,21 +326,25 @@ bool mmap_alloc_process::plat_collectAllocationResult(int_thread *thr, reg_respo
       case Arch_x86_64: {
          bool result = thr->getRegister(x86_64::rax, resp);
          assert(result);
+	 if(!result) return false;
          break;
       }
       case Arch_x86: {
          bool result = thr->getRegister(x86::eax, resp);
          assert(result);
+	 if(!result) return false;
          break;
       }
       case Arch_ppc32: {
          bool result = thr->getRegister(ppc32::r3, resp);
          assert(result);
+	 if(!result) return false;
          break;
       }
       case Arch_ppc64: {
          bool result = thr->getRegister(ppc64::r3, resp);
          assert(result);
+	 if(!result) return false;
          break;
       }
       default:

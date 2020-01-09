@@ -38,12 +38,12 @@
 #include "proccontrol/h/PlatFeatures.h"
 #include "proccontrol/h/PCErrors.h"
 
-#include "dynutil/h/dyn_regs.h"
-#include "dynutil/h/SymReader.h"
+#include "common/h/dyn_regs.h"
+#include "common/h/SymReader.h"
 
 #include "stackwalk/src/libstate.h"
 #include "stackwalk/src/sw.h"
-#include "common/h/IntervalTree.h"
+#include "common/src/IntervalTree.h"
 #include <vector>
 
 using namespace Dyninst;
@@ -92,7 +92,7 @@ ProcDebug *ProcDebug::newProcDebug(PID pid, std::string executable)
    Process::ptr proc = Process::attachProcess(pid, executable);
    if (!proc) {
       Stackwalker::setLastError(err_proccontrol, ProcControlAPI::getLastErrorMsg());
-      sw_printf("[%s:%u] - ProcControl error creating process\n", __FILE__, __LINE__);
+      sw_printf("[%s:%u] - ProcControl error creating process\n", FILE__, __LINE__);
       return NULL;
    }
    
@@ -125,7 +125,7 @@ ProcDebug *ProcDebug::newProcDebug(std::string executable,
    Process::ptr proc = Process::createProcess(executable, argv);
    if (!proc) {
       Stackwalker::setLastError(err_proccontrol, ProcControlAPI::getLastErrorMsg());
-      sw_printf("[%s:%u] - ProcControl error creating process\n", __FILE__, __LINE__);
+      sw_printf("[%s:%u] - ProcControl error creating process\n", FILE__, __LINE__);
       return NULL;
    }
 
@@ -142,14 +142,15 @@ ProcDebug::~ProcDebug()
    library_tracker = NULL;
 }
 
-#define CHECK_PROC_LIVE \
+#define CHECK_PROC_LIVE_RET(val) \
    do { \
    if (!proc || proc->isTerminated()) { \
-     sw_printf("[%s:%u] - operation on exited process\n", __FILE__, __LINE__); \
+     sw_printf("[%s:%u] - operation on exited process\n", FILE__, __LINE__); \
      Stackwalker::setLastError(err_procexit, "Process has exited or been detached"); \
-     return false; \
+     return (val); \
    } \
    } while (0)
+#define CHECK_PROC_LIVE CHECK_PROC_LIVE_RET(false)
 
 bool ProcDebug::getRegValue(MachRegister reg, THR_ID thread, 
                             MachRegisterVal &val)
@@ -166,14 +167,14 @@ bool ProcDebug::getRegValue(MachRegister reg, THR_ID thread,
    }
    ThreadPool::iterator thrd_i = proc->threads().find(thread);
    if (thrd_i == proc->threads().end()) {
-      sw_printf("[%s:%u] - Invalid thread ID to getRegValue\n", __FILE__, __LINE__);
+      sw_printf("[%s:%u] - Invalid thread ID to getRegValue\n", FILE__, __LINE__);
       Stackwalker::setLastError(err_badparam, "Invalid thread ID\n");
       return false;
    }
    Thread::ptr thrd = *thrd_i;
    bool result = thrd->getRegister(reg, val);
    if (!result) {
-      sw_printf("[%s:%u] - ProcControlAPI error reading register\n", __FILE__, __LINE__);
+      sw_printf("[%s:%u] - ProcControlAPI error reading register\n", FILE__, __LINE__);
       Stackwalker::setLastError(err_proccontrol, ProcControlAPI::getLastErrorMsg());
    }
    return result;
@@ -184,7 +185,7 @@ bool ProcDebug::readMem(void *dest, Address source, size_t size)
    CHECK_PROC_LIVE;
    bool result = proc->readMemory(dest, source, size);
    if (!result) {
-     sw_printf("[%s:%u] - ProcControlAPI error reading memory at 0x%lx\n", __FILE__, __LINE__, source);
+     sw_printf("[%s:%u] - ProcControlAPI error reading memory at 0x%lx\n", FILE__, __LINE__, source);
       Stackwalker::setLastError(err_proccontrol, ProcControlAPI::getLastErrorMsg());
    }
    return result;
@@ -218,21 +219,21 @@ bool ProcDebug::preStackwalk(THR_ID tid)
    CHECK_PROC_LIVE;
    if (tid == NULL_THR_ID)
       getDefaultThread(tid);
-   sw_printf("[%s:%u] - Calling preStackwalk for thread %d\n", __FILE__, __LINE__, tid);
+   sw_printf("[%s:%u] - Calling preStackwalk for thread %d\n", FILE__, __LINE__, tid);
    
    ThreadPool::iterator thread_iter = proc->threads().find(tid);
    if (thread_iter == proc->threads().end()) {
-      sw_printf("[%s:%u] - Stackwalk on non-existant thread\n", __FILE__, __LINE__);
+      sw_printf("[%s:%u] - Stackwalk on non-existant thread\n", FILE__, __LINE__);
       Stackwalker::setLastError(err_badparam, "Invalid thread ID\n");
       return false;     
    }
    Thread::ptr active_thread = *thread_iter;
 
    if (active_thread->isRunning()) {
-      sw_printf("[%s:%u] - Stopping running thread %d\n", __FILE__, __LINE__, tid);
+      sw_printf("[%s:%u] - Stopping running thread %d\n", FILE__, __LINE__, tid);
       bool result = active_thread->stopThread();
       if (!result) {
-         sw_printf("[%s:%u] - Error stopping thread\n", __FILE__, __LINE__);
+         sw_printf("[%s:%u] - Error stopping thread\n", FILE__, __LINE__);
          Stackwalker::setLastError(err_proccontrol, "Could not stop thread for stackwalk\n");
          return false;
       }
@@ -246,11 +247,11 @@ bool ProcDebug::postStackwalk(THR_ID tid)
    CHECK_PROC_LIVE;
    if (tid == NULL_THR_ID)
       getDefaultThread(tid);
-   sw_printf("[%s:%u] - Calling postStackwalk for thread %d\n", __FILE__, __LINE__, tid);
+   sw_printf("[%s:%u] - Calling postStackwalk for thread %d\n", FILE__, __LINE__, tid);
    
    ThreadPool::iterator thread_iter = proc->threads().find(tid);
    if (thread_iter == proc->threads().end()) {
-      sw_printf("[%s:%u] - Stackwalk on non-existant thread\n", __FILE__, __LINE__);
+      sw_printf("[%s:%u] - Stackwalk on non-existant thread\n", FILE__, __LINE__);
       Stackwalker::setLastError(err_badparam, "Invalid thread ID\n");
       return false;     
    }
@@ -258,10 +259,10 @@ bool ProcDebug::postStackwalk(THR_ID tid)
    
    set<Thread::ptr>::iterator i = needs_resume.find(active_thread);
    if (i != needs_resume.end()) {
-      sw_printf("[%s:%u] - Resuming thread %d after stackwalk\n", __FILE__, __LINE__, tid);
+      sw_printf("[%s:%u] - Resuming thread %d after stackwalk\n", FILE__, __LINE__, tid);
       bool result = active_thread->continueThread();
       if (!result) {
-         sw_printf("[%s:%u] - Error resuming stopped thread %d\n", __FILE__, __LINE__, tid);
+         sw_printf("[%s:%u] - Error resuming stopped thread %d\n", FILE__, __LINE__, tid);
          Stackwalker::setLastError(err_proccontrol, ProcControlAPI::getLastErrorMsg());
          return false;
       }
@@ -274,12 +275,12 @@ bool ProcDebug::pause(THR_ID tid)
 {
    CHECK_PROC_LIVE;
    if (tid == NULL_THR_ID) {
-      sw_printf("[%s:%u] - Stopping process %d\n", __FILE__, __LINE__, proc->getPid());
+      sw_printf("[%s:%u] - Stopping process %d\n", FILE__, __LINE__, proc->getPid());
 
       bool result = proc->stopProc();
       if (!result) {
          sw_printf("[%s:%u] - Error stopping process %d\n", 
-                   __FILE__, __LINE__, proc->getPid());
+                   FILE__, __LINE__, proc->getPid());
          Stackwalker::setLastError(err_proccontrol, ProcControlAPI::getLastErrorMsg());
          return false;
       }
@@ -288,21 +289,21 @@ bool ProcDebug::pause(THR_ID tid)
 
    ThreadPool::iterator thread_iter = proc->threads().find(tid);
    if (thread_iter == proc->threads().end()) {
-      sw_printf("[%s:%u] - stop on non-existant thread\n", __FILE__, __LINE__);
+      sw_printf("[%s:%u] - stop on non-existant thread\n", FILE__, __LINE__);
       Stackwalker::setLastError(err_badparam, "Invalid thread ID\n");
       return false;     
    }
    Thread::ptr thread = *thread_iter;
-   sw_printf("[%s:%u] - Stopping thread %d\n", __FILE__, __LINE__, tid);
+   sw_printf("[%s:%u] - Stopping thread %d\n", FILE__, __LINE__, tid);
 
    if (thread->isStopped()) {
-      sw_printf("[%s:%u] - Thread %d is already stopped\n", __FILE__, __LINE__, tid);
+      sw_printf("[%s:%u] - Thread %d is already stopped\n", FILE__, __LINE__, tid);
       return true;
    }
 
    bool result = thread->stopThread();
    if (!result) {
-      sw_printf("[%s:%u] - Error stopping thread %d\n", __FILE__, __LINE__, tid);
+      sw_printf("[%s:%u] - Error stopping thread %d\n", FILE__, __LINE__, tid);
       Stackwalker::setLastError(err_proccontrol, ProcControlAPI::getLastErrorMsg());
       return false;
    }
@@ -314,12 +315,12 @@ bool ProcDebug::resume(THR_ID tid)
 {
    CHECK_PROC_LIVE;
    if (tid == NULL_THR_ID) {
-      sw_printf("[%s:%u] - Running process %d\n", __FILE__, __LINE__, proc->getPid());
+      sw_printf("[%s:%u] - Running process %d\n", FILE__, __LINE__, proc->getPid());
 
       bool result = proc->continueProc();
       if (!result) {
          sw_printf("[%s:%u] - Error running process %d\n", 
-                   __FILE__, __LINE__, proc->getPid());
+                   FILE__, __LINE__, proc->getPid());
          Stackwalker::setLastError(err_proccontrol, ProcControlAPI::getLastErrorMsg());
          return false;
       }
@@ -328,21 +329,21 @@ bool ProcDebug::resume(THR_ID tid)
 
    ThreadPool::iterator thread_iter = proc->threads().find(tid);
    if (thread_iter == proc->threads().end()) {
-      sw_printf("[%s:%u] - continue on non-existant thread\n", __FILE__, __LINE__);
+      sw_printf("[%s:%u] - continue on non-existant thread\n", FILE__, __LINE__);
       Stackwalker::setLastError(err_badparam, "Invalid thread ID\n");
       return false;     
    }
    Thread::ptr thread = *thread_iter;
-   sw_printf("[%s:%u] - Running thread %d\n", __FILE__, __LINE__, tid);
+   sw_printf("[%s:%u] - Running thread %d\n", FILE__, __LINE__, tid);
 
    if (thread->isRunning()) {
-      sw_printf("[%s:%u] - Thread %d is already running\n", __FILE__, __LINE__, tid);
+      sw_printf("[%s:%u] - Thread %d is already running\n", FILE__, __LINE__, tid);
       return true;
    }
 
    bool result = thread->continueThread();
    if (!result) {
-      sw_printf("[%s:%u] - Error running thread %d\n", __FILE__, __LINE__, tid);
+      sw_printf("[%s:%u] - Error running thread %d\n", FILE__, __LINE__, tid);
       Stackwalker::setLastError(err_proccontrol, ProcControlAPI::getLastErrorMsg());
       return false;
    }
@@ -360,7 +361,7 @@ bool ProcDebug::detach(bool leave_stopped)
    CHECK_PROC_LIVE;   
    bool result = proc->detach(leave_stopped);
    if (!result) {
-      sw_printf("[%s:%u] - Error detaching from process %d\n", __FILE__, __LINE__, 
+      sw_printf("[%s:%u] - Error detaching from process %d\n", FILE__, __LINE__, 
                 proc->getPid());
       Stackwalker::setLastError(err_proccontrol, ProcControlAPI::getLastErrorMsg());
       return false;
@@ -375,7 +376,7 @@ int ProcDebug::getNotificationFD()
 
 std::string ProcDebug::getExecutablePath()
 {
-   CHECK_PROC_LIVE;
+   CHECK_PROC_LIVE_RET("");
    return proc->libraries().getExecutable()->getName();
 }
 
@@ -383,7 +384,7 @@ bool ProcDebug::handleDebugEvent(bool block)
 {
    bool result = Process::handleEvents(block);
    if (!result) {
-      sw_printf("[%s:%u] - Error handling debug events\n", __FILE__, __LINE__);
+      sw_printf("[%s:%u] - Error handling debug events\n", FILE__, __LINE__);
       Stackwalker::setLastError(err_proccontrol, ProcControlAPI::getLastErrorMsg());
       return false;
    }
@@ -424,7 +425,7 @@ bool PCLibraryState::cacheLibraryRanges(Library::ptr lib)
    SymReader *reader = fact->openSymbolReader(filename);
    if (!reader) {
       sw_printf("[%s:%u] - Error could not open expected file %s\n", 
-                __FILE__, __LINE__, filename.c_str());
+                FILE__, __LINE__, filename.c_str());
       return false;
    }
 
@@ -497,7 +498,7 @@ void PCLibraryState::checkForNewLib(Library::ptr lib)
    if (lib->getData())
       return;
    sw_printf("[%s:%u] - Detected new library %s at %lx, notifying\n",
-             __FILE__, __LINE__, lib->getName().c_str(), lib->getLoadAddress());
+             FILE__, __LINE__, lib->getName().c_str(), lib->getLoadAddress());
    
    lib->setData((void *) 0x1);
 
@@ -618,7 +619,7 @@ bool PCLibraryState::memoryScan(Process::ptr proc, Address addr, LibAddrPair &li
          lib.first = slib->getName();
          lib.second = slib->getLoadAddress();
          sw_printf("[%s:%u] - Found library %s contains address %lx\n",
-                   __FILE__, __LINE__, lib.first.c_str(), addr);
+                   FILE__, __LINE__, lib.first.c_str(), addr);
          return true;
       }
       else if (distance < 0) {
@@ -650,7 +651,7 @@ bool PCLibraryState::memoryScan(Process::ptr proc, Address addr, LibAddrPair &li
       lib.first = nearest_predecessor->getName();
       lib.second = nearest_predecessor->getLoadAddress();
       sw_printf("[%s:%u] - Found library %s contains address %lx\n",
-                __FILE__, __LINE__, lib.first.c_str(), addr);
+                FILE__, __LINE__, lib.first.c_str(), addr);
       return true;
    }
    /**
@@ -660,7 +661,7 @@ bool PCLibraryState::memoryScan(Process::ptr proc, Address addr, LibAddrPair &li
       lib.first = nearest_successor->getName();
       lib.second = nearest_successor->getLoadAddress();
       sw_printf("[%s:%u] - Found library %s contains address %lx\n",
-                __FILE__, __LINE__, lib.first.c_str(), addr);
+                FILE__, __LINE__, lib.first.c_str(), addr);
       return true;
    }
 
@@ -681,13 +682,13 @@ bool PCLibraryState::memoryScan(Process::ptr proc, Address addr, LibAddrPair &li
      
      lib.first = proc->libraries().getExecutable()->getName();
      lib.second = proc->libraries().getExecutable()->getLoadAddress();
-     sw_printf("[%s:%u] - Found executable %s contains address %lx\n", __FILE__,
+     sw_printf("[%s:%u] - Found executable %s contains address %lx\n", FILE__,
 	       __LINE__, lib.first.c_str(), addr);
      return true;
    }
    
    sw_printf("[%s:%u] - Could not find library for addr %lx\n", 
-             __FILE__, __LINE__, addr);
+             FILE__, __LINE__, addr);
    return false;
 }
 
@@ -744,7 +745,7 @@ bool PCLibraryState::getAOut(LibAddrPair &ao)
 
    Library::ptr lib = proc->libraries().getExecutable();
    if (!lib) {
-      sw_printf("[%s:%u] - Could not get executable\n", __FILE__, __LINE__);
+      sw_printf("[%s:%u] - Could not get executable\n", FILE__, __LINE__);
       return false;
    }
    ao = LibAddrPair(lib->getName(), lib->getLoadAddress());
@@ -800,7 +801,8 @@ public:
 
 StackCallback::StackCallback(CallTree &t) :
    tree(t),
-   cur(NULL)
+   cur(NULL),
+   cur_walker(NULL)
 {
    top_first = true;
 }
@@ -816,7 +818,7 @@ bool StackCallback::beginStackWalk(Thread::ptr thr)
    ProcessState *pstate = ProcessState::getProcessStateByPid(proc->getPid());
    if (!pstate) {
       sw_printf("[%s:%u] - Error, unknown process state for %d while starting stackwalk\n", 
-                __FILE__, __LINE__, proc->getPid());
+                FILE__, __LINE__, proc->getPid());
       return false;
    }
 

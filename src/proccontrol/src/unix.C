@@ -39,12 +39,15 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 
-#include "common/h/Types.h"
+#include <string>
+#include "common/src/Types.h"
 #if defined(os_linux)
-#include "common/h/linuxKludges.h"
+#include "common/src/linuxKludges.h"
 #elif defined(os_freebsd)
-#include "common/h/freebsdKludges.h"
+#include "common/src/freebsdKludges.h"
 #endif
+
+using namespace std;
 
 unix_process::unix_process(Dyninst::PID p, std::string e, std::vector<std::string> a, 
                            std::vector<std::string> envp, std::map<int,int> f) :
@@ -157,12 +160,12 @@ bool unix_process::plat_decodeMemoryRights(Process::mem_perm& perm,
                                            unsigned long rights) {
     switch (rights) {
       default:                                 return false;
-      case PROT_NONE:                          perm.clrR().clrW().clrX();
-      case PROT_READ:                          perm.setR().clrW().clrX();
-      case PROT_EXEC:                          perm.clrR().clrW().setX();
-      case PROT_READ | PROT_WRITE:             perm.setR().setW().clrX();
-      case PROT_READ | PROT_EXEC:              perm.setR().clrW().setX();
-      case PROT_READ | PROT_WRITE | PROT_EXEC: perm.setR().setW().setX();
+      case PROT_NONE:                          perm.clrR().clrW().clrX(); break;
+      case PROT_READ:                          perm.setR().clrW().clrX(); break;
+      case PROT_EXEC:                          perm.clrR().clrW().setX(); break;
+      case PROT_READ | PROT_WRITE:             perm.setR().setW().clrX(); break;
+      case PROT_READ | PROT_EXEC:              perm.setR().clrW().setX(); break;
+      case PROT_READ | PROT_WRITE | PROT_EXEC: perm.setR().setW().setX(); break;
     }
 
     return true;
@@ -190,10 +193,8 @@ bool unix_process::plat_encodeMemoryRights(Process::mem_perm perm,
 }
 
 bool unix_process::plat_getMemoryAccessRights(Dyninst::Address addr,
-                                              size_t size,
                                               Process::mem_perm& perm) {
     (void)addr;
-    (void)size;
     (void)perm;
     perr_printf("Called getMemoryAccessRights on unspported platform\n");
     setLastError(err_unsupported, "Get Memory Permission not supported on this platform\n");
@@ -215,17 +216,25 @@ bool unix_process::plat_setMemoryAccessRights(Dyninst::Address addr,
     if (!mprotect((void*)addr, size, (int)rights)) {
         pthrd_printf("ERROR: failed to set access rights for page %lx\n", addr);
         switch (errno) {
-          case EACCES: setLastError(err_prem, "Permission denied");
-          case EINVAL: setLastError(err_badparam,
-                          "Given page address is invalid or not page-aligned");
-          case ENOMEM: setLastError(err_badparam, "Insufficient memory,"
-                          "or the given memory region contains invalid address space");
-          default:     setLastError(err_unsupported, "Unknown error code");
+          case EACCES:
+              setLastError(err_prem, "Permission denied");
+              break;
+          case EINVAL:
+              setLastError(err_badparam,
+                      "Given page address is invalid or not page-aligned");
+              break;
+          case ENOMEM:
+              setLastError(err_badparam, "Insufficient memory, "
+                      "or the given memory region contains invalid address space");
+              break;
+          default:
+              setLastError(err_unsupported, "Unknown error code");
+              break;
         }
         return false;
     }
 
-    if (!plat_getMemoryAccessRights(addr, size, oldPerm)) {
+    if (!plat_getMemoryAccessRights(addr, oldPerm)) {
         pthrd_printf("ERROR: failed to get access rights for page %lx\n", addr);
         return false;
     }
@@ -236,8 +245,8 @@ bool unix_process::plat_setMemoryAccessRights(Dyninst::Address addr,
 bool unix_process::plat_findAllocatedRegionAround(Dyninst::Address addr,
                                                   Process::MemoryRegion& memRegion) {
     (void)addr;
-    memRegion.first  = NULL;
-    memRegion.second = NULL;
+    memRegion.first  = 0;
+    memRegion.second = 0;
     perr_printf("Called findAllocatedRegionAround on unspported platform\n");
     setLastError(err_unsupported, "Find Allocated Memory Region not supported on this platform\n");
     return false;
@@ -279,4 +288,17 @@ bool unix_process::plat_supportFork()
 bool unix_process::plat_supportExec()
 {
    return true;
+}
+
+std::string int_process::plat_canonicalizeFileName(std::string path)
+{
+   char *result = realpath(path.c_str(), NULL);
+   if (result) {
+      string sresult(result);
+      free(result);
+      return sresult;
+   }
+   else {
+      return path;
+   }
 }

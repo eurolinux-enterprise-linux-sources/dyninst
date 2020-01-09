@@ -63,10 +63,11 @@ class func_instance;
 #define DYNINST_8_1
 #define DYNINST_8_1_1
 #define DYNINST_8_1_2
+#define DYNINST_8_2
 
 #define DYNINST_MAJOR 8
-#define DYNINST_MINOR 1
-#define DYNINST_SUBMINOR 2
+#define DYNINST_MINOR 2
+#define DYNINST_SUBMINOR 0
 
 #ifdef IBM_BPATCH_COMPAT
 typedef void *BPatch_Address;
@@ -197,6 +198,10 @@ class BPATCH_DLL_EXPORT BPatch {
    
    BPatch_Vector<BPatchUserEventCallback> userEventCallbacks;
    BPatch_Vector<BPatchStopThreadCallback> stopThreadCallbacks;
+
+   // If we're destroying everything, skip cleaning up some intermediate
+   // data structures
+   bool inDestructor;
 
    public:  
      

@@ -47,11 +47,11 @@
 
 #include <iostream>
 
-#include "common/h/parseauxv.h"
-#include "common/h/headers.h"
-#include "common/h/pathName.h"
+#include "common/src/parseauxv.h"
+#include "common/src/headers.h"
+#include "common/src/pathName.h"
 
-#include "common/h/addrtranslate.h"
+#include "common/src/addrtranslate.h"
 #include "common/src/addrtranslate-sysv.h"
 
 #if defined(os_linux) || defined(os_bg)
@@ -61,7 +61,7 @@
 #endif
 
 #if defined(os_linux)
-#include "common/h/linuxKludges.h"
+#include "common/src/linuxKludges.h"
 #endif
 
 using namespace std;
@@ -292,17 +292,6 @@ bool link_map_dyn<link_map_X>::load_link(Address addr)
    return proc->ReadMem(addr, &link_elm, sizeof(link_elm));
 }
 
-static const char *deref_link(const char *path)
-{
-   static char buffer[PATH_MAX], *p;
-   buffer[PATH_MAX-1] = '\0';
-   p = realpath(path, buffer);
-   if (!p)
-      return path;
-   return p;
-}
-
-
 ProcessReaderSelf::ProcessReaderSelf() :
    ProcessReader() 
 {
@@ -342,7 +331,7 @@ vector< pair<Address, unsigned long> > *LoadedLib::getMappedRegions()
 
    FCNode *fc = files.getNode(name, symreader_factory);
    if (!fc)
-      return false;
+      return NULL;
 
    vector<SymSegment> segs;
    fc->getSegments(segs);
@@ -724,19 +713,19 @@ bool AddressTranslateSysV::refresh()
       r_debug_native = new r_debug_dyn<r_debug>(reader, r_debug_addr);
       if (!r_debug_native)
       {
-	translate_printf("No r_debug_native, done\n");
-        result = true;
-        goto done;
+         translate_printf("No r_debug_native, done\n");
+         result = true;
+         goto done;
       }
       else if (!r_debug_native->is_valid() && read_abort)
       {
-	translate_printf("r_debug_native is not valid and aborting read, done\n");
+         translate_printf("r_debug_native is not valid and aborting read, done\n");
          result = false;
          goto all_done;
       }
       else if (!r_debug_native->is_valid())
       {
-	translate_printf("r_debug_native is not valid, done\n");
+         translate_printf("r_debug_native is not valid, done\n");
          if (interpreter) {
             libs.push_back(getLoadedLibByNameAddr(interpreter_base,
                                                   interpreter->getFilename()));
@@ -789,10 +778,10 @@ bool AddressTranslateSysV::refresh()
       }
       string obj_name(link_elm->l_name());
       // Don't re-add the executable, it has already been added
-      if( getExecName() == string(deref_link(obj_name.c_str())) ) {
+      if (getExecName() == obj_name) {
          if (exec)
             exec->dynamic_addr = (Address) link_elm->l_ld();
-          continue;
+         continue;
       }
 
       Address text = (Address) link_elm->l_addr();
@@ -805,27 +794,10 @@ bool AddressTranslateSysV::refresh()
       if (!link_elm->is_valid())
          goto done;
 
-#if defined(os_linux)
-      unsigned maps_size;
-      if (obj_name == "") { //Augment using maps
-         if (!maps)
-            maps = getLinuxMaps(pid, maps_size);
-         for (unsigned i=0; maps && i<maps_size; i++) {
-            if (text == maps[i].start) {
-               obj_name = maps[i].path;
-               break;
-            }
-         }
-      }
-      if (obj_name.c_str()[0] == '[')
-         continue;
-#endif
-      
-      string s(deref_link(obj_name.c_str()));
-      LoadedLib *ll = getLoadedLibByNameAddr(text, s);
+      LoadedLib *ll = getLoadedLibByNameAddr(text, obj_name);
       ll->dynamic_addr = (Address) link_elm->l_ld();
       loaded_lib_count++;
-      translate_printf("    New Loaded Library: %s(%lx)\n",  s.c_str(), text);
+      translate_printf("    New Loaded Library: %s(%lx)\n",  obj_name.c_str(), text);
 
       libs.push_back(ll);
    } while (link_elm->load_next());
@@ -871,8 +843,10 @@ FCNode::FCNode(string f, dev_t d, ino_t i, SymbolReaderFactory *factory_) :
    device(d),
    inode(i),
    parsed_file(false),
+   parsed_file_fast(false),
    parse_error(false),
    is_interpreter(false),
+   addr_size(0),
    r_debug_offset(0),
    r_trap_offset(0),
    symreader(NULL),
@@ -1033,6 +1007,7 @@ bool AddressTranslateSysV::plat_getTrapAddr() {
 
 Address AddressTranslateSysV::adjustForAddrSpaceWrap(Address base, std::string name) {
 #if !defined(arch_64bit)
+   (void)name; // unused
    return base;
 #else
    if (sizeof(long) != 8) return base;

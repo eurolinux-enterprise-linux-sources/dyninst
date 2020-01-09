@@ -43,7 +43,26 @@ using namespace std;
 
 unsigned int response::next_id = 1;
 
-static Mutex id_lock;
+static Mutex<> id_lock;
+
+unsigned newResponseID()
+{
+  unsigned id;
+  id_lock.lock();
+  id = response::next_id++;
+  id_lock.unlock();
+  return id;
+}
+
+unsigned newResponseID(unsigned size)
+{
+  unsigned id;
+  id_lock.lock();
+  id = response::next_id;
+  response::next_id += size;
+  id_lock.unlock();
+  return id;
+}
 
 response::response() :
    event(Event::ptr()),
@@ -54,13 +73,12 @@ response::response() :
    errorcode(0),
    proc(NULL),
    aio(NULL),
+   resp_type((resp_type_t)-1),
    decoder_event(NULL),
    multi_resp_size(0),
    multi_resp_recvd(0)
 {
-  id_lock.lock();
-  id = next_id++;
-  id_lock.unlock();
+   id = newResponseID();
 }
 
 response::~response()
@@ -347,7 +365,7 @@ void responses_pending::signal()
    cvar.broadcast();
 }
 
-CondVar &responses_pending::condvar()
+CondVar<> &responses_pending::condvar()
 {
    return cvar;
 }
@@ -704,7 +722,7 @@ void data_response::postResponse(void *d)
 }
 
 unsigned int ResponseSet::next_id = 1;
-Mutex ResponseSet::id_lock;
+Mutex<> ResponseSet::id_lock;
 std::map<unsigned int, ResponseSet *> ResponseSet::all_respsets;
 
 ResponseSet::ResponseSet()
@@ -732,6 +750,7 @@ unsigned ResponseSet::getIDByIndex(unsigned int index, bool &found) const
   found = true;
   return i->second;
 }
+
 unsigned int ResponseSet::getID() const {
   return myid;
 }

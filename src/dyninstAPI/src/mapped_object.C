@@ -62,13 +62,6 @@ using namespace Dyninst::ProcControlAPI;
 #endif
 // Whee hasher...
 
-unsigned imgFuncHash(const parse_func * const &func) {
-    return addrHash4((Address) func);
-}
-unsigned imgVarHash(const image_variable * const &func)
-{
-    return addrHash4((Address) func);
-}
 
 // triggered when parsing needs to check if the underlying data has changed
 bool codeBytesUpdateCB(void *objCB, Address targ)
@@ -84,11 +77,6 @@ mapped_object::mapped_object(fileDescriptor fileDesc,
   DynObject(img->codeObject(), proc, fileDesc.code()),
   desc_(fileDesc),
   fullName_(img->getObject()->file()),
-  everyUniqueVariable(imgVarHash),
-  allFunctionsByMangledName(::Dyninst::stringhash),
-  allFunctionsByPrettyName(::Dyninst::stringhash),
-  allVarsByMangledName(::Dyninst::stringhash),
-  allVarsByPrettyName(::Dyninst::stringhash),
   dirty_(false),
   dirtyCalled_(false),
   image_(img),
@@ -125,6 +113,7 @@ mapped_object::mapped_object(fileDescriptor fileDesc,
                   FILE__, __LINE__, codeAbs(), codeAbs() + imageSize());
    startup_printf("[%s:%d] \tData: 0x%lx to 0x%lx\n",
                   FILE__, __LINE__, dataAbs(), dataAbs() + dataSize());
+   image_->getObject()->rebase(codeBase_);
 
 
    // Sets "fileName_"
@@ -135,7 +124,7 @@ mapped_object *mapped_object::createMappedObject(Library::const_ptr lib,
                                                  AddressSpace *p,
                                                  BPatch_hybridMode analysisMode,
                                                  bool parseGaps) {
-   fileDescriptor desc(lib->getName(),
+   fileDescriptor desc(lib->getAbsoluteName(),
                        lib->getLoadAddress(),
                        p->usesDataLoadAddress() ? lib->getDataLoadAddress() : lib->getLoadAddress(),
                        lib->isSharedLib());
@@ -220,11 +209,6 @@ mapped_object::mapped_object(const mapped_object *s, AddressSpace *child) :
    fullName_(s->fullName_),
    fileName_(s->fileName_),
    dataBase_(s->dataBase_),
-   everyUniqueVariable(imgVarHash),
-   allFunctionsByMangledName(::Dyninst::stringhash),
-   allFunctionsByPrettyName(::Dyninst::stringhash),
-   allVarsByMangledName(::Dyninst::stringhash),
-   allVarsByPrettyName(::Dyninst::stringhash),
    dirty_(s->dirty_),
    dirtyCalled_(s->dirtyCalled_),
    image_(s->image_),
@@ -234,6 +218,7 @@ mapped_object::mapped_object(const mapped_object *s, AddressSpace *child) :
    analysisMode_(s->analysisMode_),
    pagesUpdated_(true),
    codeByteUpdates_(0),
+   memEnd_(s->memEnd_),
    memoryImg_(s->memoryImg_)
 {
    // Let's do modules
@@ -247,9 +232,9 @@ mapped_object::mapped_object(const mapped_object *s, AddressSpace *child) :
 
    copyCFG(const_cast<mapped_object*>(s));
 
-   const pdvector<int_variable *> parVars = s->everyUniqueVariable.values();
-   for (unsigned j = 0; j < parVars.size(); j++) {
-      int_variable *parVar = parVars[j];
+   for (auto iter = s->everyUniqueVariable.begin();
+        iter != s->everyUniqueVariable.end(); ++iter) {
+      int_variable *parVar = iter->second;
       assert(parVar->mod());
       mapped_module *mod = getOrCreateForkedModule(parVar->mod());
       int_variable *newVar = new int_variable(parVar,
@@ -275,33 +260,33 @@ mapped_object::~mapped_object()
       delete everyModule[i];
    everyModule.clear();
 
-   pdvector<int_variable *> vars = everyUniqueVariable.values();
-   for (unsigned k = 0; k < vars.size(); k++) {
-      delete vars[k];
+   for (auto iter = everyUniqueVariable.begin();
+        iter != everyUniqueVariable.end(); ++iter) {
+      delete iter->second;
    }
    everyUniqueVariable.clear();
 
-   pdvector<pdvector<func_instance *> * > mangledFuncs = allFunctionsByMangledName.values();
-   for (unsigned i = 0; i < mangledFuncs.size(); i++) {
-      delete mangledFuncs[i];
+   for (auto fm_iter = allFunctionsByMangledName.begin(); 
+        fm_iter != allFunctionsByMangledName.end(); ++fm_iter) {
+      delete fm_iter->second;
    }
    allFunctionsByMangledName.clear();
 
-   pdvector<pdvector<func_instance *> * > prettyFuncs = allFunctionsByPrettyName.values();
-   for (unsigned i = 0; i < prettyFuncs.size(); i++) {
-      delete prettyFuncs[i];
+   for (auto fp_iter = allFunctionsByPrettyName.begin(); 
+        fp_iter != allFunctionsByPrettyName.end(); ++fp_iter) {
+      delete fp_iter->second;
    }
    allFunctionsByPrettyName.clear();
 
-   pdvector<pdvector<int_variable *> * > mV = allVarsByMangledName.values();
-   for (unsigned i = 0; i < mV.size(); i++) {
-      delete mV[i];
+   for (auto vm_iter = allVarsByMangledName.begin(); 
+        vm_iter != allVarsByMangledName.end(); ++vm_iter) {
+      delete vm_iter->second;
    }
    allVarsByMangledName.clear();
 
-   pdvector<pdvector<int_variable *> * > pV = allVarsByPrettyName.values();
-   for (unsigned i = 0; i < pV.size(); i++) {
-      delete pV[i];
+   for (auto vp_iter = allVarsByPrettyName.begin(); 
+        vp_iter != allVarsByPrettyName.end(); ++vp_iter) {
+      delete vp_iter->second;
    }
    allVarsByPrettyName.clear();
 
@@ -367,36 +352,6 @@ bool mapped_object::analyze()
       findVariable(unmappedVars[vi]);
   }
   return true;
-}
-
-// TODO: this should probably not be a mapped_object method, but since
-// for now it is only used by mapped_objects it is
-// from a string that is a complete path name to a function in a module
-// (ie. "/usr/lib/libc.so.1/write") return a string with the function
-// part removed.  return 0 on error
-char *mapped_object::getModulePart(std::string &full_path_name) {
-
-    char *whole_name = P_strdup(full_path_name.c_str());
-    char *next=0;
-    char *last=next;
-    if((last = P_strrchr(whole_name, '/'))){
-        next = whole_name;
-        for(u_int i=0;(next!=last)&&(i<full_path_name.length()); i++){
-	    next++;
-	    if(next == last){
-		u_int size = i+2;
-	        char *temp_str = new char[size];
-	        if(P_strncpy(temp_str,whole_name,size-1)){
-                    temp_str[size-1] = '\0';
-		    delete whole_name;
-		    return temp_str;
-		    temp_str = 0;
-                }
-            }
-        }
-    }
-    delete whole_name;
-    return 0;
 }
 
 mapped_module *mapped_object::findModule(string m_name, bool wildcard)
@@ -491,15 +446,16 @@ const pdvector<func_instance *> *mapped_object::findFuncVectorByPretty(const std
 
    assert(img_funcs->size());
    // Fast path:
-   if (allFunctionsByPrettyName.defines(funcname)) {
+   auto iter = allFunctionsByPrettyName.find(funcname);
+   if (iter != allFunctionsByPrettyName.end()) {
       // Okay, we've pulled in some of the functions before (this can happen as a
       // side effect of adding functions). But did we get them all?
-       pdvector<func_instance *> *map_funcs = allFunctionsByPrettyName[funcname];
-       if (map_funcs->size() == img_funcs->size()) {
-           // We're allocating at the lower level....
-           delete img_funcs;
-           return map_funcs;
-       }
+      pdvector<func_instance *> *map_funcs = iter->second;
+      if (map_funcs->size() == img_funcs->size()) {
+         // We're allocating at the lower level....
+         delete img_funcs;
+         return map_funcs;
+      }
    }
 
    // Slow path: check each img_func, add those we don't already have, and return.
@@ -526,24 +482,25 @@ const pdvector <func_instance *> *mapped_object::findFuncVectorByMangled(const s
 
     assert(img_funcs->size());
     // Fast path:
-    if (allFunctionsByMangledName.defines(funcname)) {
+    auto iter = allFunctionsByMangledName.find(funcname);
+    if (iter != allFunctionsByMangledName.end()) {
         // Okay, we've pulled in some of the functions before (this can happen as a
         // side effect of adding functions). But did we get them all?
-        pdvector<func_instance *> *map_funcs = allFunctionsByMangledName[funcname];
-        if (map_funcs->size() == img_funcs->size()) {
-            // We're allocating at the lower level...
-            delete img_funcs;
-            return map_funcs;
-        }
+       pdvector<func_instance *> *map_funcs = iter->second;
+       if (map_funcs->size() == img_funcs->size()) {
+          // We're allocating at the lower level...
+          delete img_funcs;
+          return map_funcs;
+       }
     }
-
+    
     // Slow path: check each img_func, add those we don't already have, and return.
     for (unsigned i = 0; i < img_funcs->size(); i++) {
-        parse_func *func = (*img_funcs)[i];
-        if (funcs_.find(func) == funcs_.end()) {
-            findFunction(func);
-        }
-        assert(funcs_[func]);
+       parse_func *func = (*img_funcs)[i];
+       if (funcs_.find(func) == funcs_.end()) {
+          findFunction(func);
+       }
+       assert(funcs_[func]);
     }
     delete img_funcs;
     return allFunctionsByMangledName[funcname];
@@ -560,21 +517,23 @@ const pdvector<int_variable *> *mapped_object::findVarVectorByPretty(const std::
 
     assert(img_vars->size());
     // Fast path:
-    if (allVarsByPrettyName.defines(varname)) {
-        // Okay, we've pulled in some of the variabletions before (this can happen as a
-        // side effect of adding variabletions). But did we get them all?
-        pdvector<int_variable *> *map_variables = allVarsByPrettyName[varname];
-        if (map_variables->size() == img_vars->size()) {
-            delete img_vars;
-            return map_variables;
-        }
+    auto iter = allVarsByPrettyName.find(varname);
+    if (iter != allVarsByPrettyName.end()) {
+       // Okay, we've pulled in some of the variabletions before (this can happen as a
+       // side effect of adding variabletions). But did we get them all?
+       pdvector<int_variable *> *map_variables = iter->second;
+       if (map_variables->size() == img_vars->size()) {
+          delete img_vars;
+          return map_variables;
+       }
     }
-
+    
     // Slow path: check each img_variable, add those we don't already have, and return.
     for (unsigned i = 0; i < img_vars->size(); i++) {
         image_variable *var = (*img_vars)[i];
-        if (!everyUniqueVariable.defines(var)) {
-            findVariable(var);
+        auto iter2 = everyUniqueVariable.find(var);
+        if (iter2 == everyUniqueVariable.end()) {
+           findVariable(var);
         }
         assert(everyUniqueVariable[var]);
     }
@@ -592,23 +551,26 @@ const pdvector <int_variable *> *mapped_object::findVarVectorByMangled(const std
 
   assert(img_vars->size());
   // Fast path:
-  if (allVarsByMangledName.defines(varname)) {
+
+  auto iter = allVarsByMangledName.find(varname);
+  if (iter != allVarsByMangledName.end()) {
       // Okay, we've pulled in some of the variabletions before (this can happen as a
-      // side effect of adding variabletions). But did we get them all?
-      pdvector<int_variable *> *map_variables = allVarsByMangledName[varname];
+      // side effect of adding variables). But did we get them all?
+     pdvector<int_variable *> *map_variables = iter->second;
       if (map_variables->size() == img_vars->size()) {
-          delete img_vars;
-          return map_variables;
+         delete img_vars;
+         return map_variables;
       }
   }
-
+  
   // Slow path: check each img_variable, add those we don't already have, and return.
   for (unsigned i = 0; i < img_vars->size(); i++) {
-      image_variable *var = (*img_vars)[i];
-      if (!everyUniqueVariable.defines(var)) {
-          findVariable(var);
-      }
-      assert(everyUniqueVariable[var]);
+     image_variable *var = (*img_vars)[i];
+     auto iter2 = everyUniqueVariable.find(var);
+     if (iter2 == everyUniqueVariable.end()) {
+        findVariable(var);
+     }
+     assert(everyUniqueVariable[var]);
   }
   delete img_vars;
   return allVarsByMangledName[varname];
@@ -629,7 +591,7 @@ const int_variable *mapped_object::getVariable(const std::string &varname) {
 block_instance *mapped_object::findBlockByEntry(Address addr)
 {
     std::set<block_instance *> allBlocks;
-    if (!findBlocksByAddr(addr, allBlocks)) return false;
+    if (!findBlocksByAddr(addr, allBlocks)) return NULL;
     for (std::set<block_instance *>::iterator iter = allBlocks.begin();
         iter != allBlocks.end(); ++iter)
     {
@@ -734,10 +696,11 @@ bool mapped_object::getAllVariables(pdvector<int_variable *> &vars) {
     const pdvector<image_variable *> &img_vars = parse_img()->getAllVariables();
 
     for (unsigned i = 0; i < img_vars.size(); i++) {
-        if (!everyUniqueVariable.defines(img_vars[i])) {
-            findVariable(img_vars[i]);
-        }
-        vars.push_back(everyUniqueVariable[img_vars[i]]);
+       auto iter = everyUniqueVariable.find(img_vars[i]);
+       if (iter == everyUniqueVariable.end()) {
+          findVariable(img_vars[i]);
+       }
+       vars.push_back(everyUniqueVariable[img_vars[i]]);
     }
     return vars.size() > start;
 }
@@ -748,38 +711,20 @@ func_instance *mapped_object::findFunction(ParseAPI::Function *papi_func) {
 
 void mapped_object::addFunctionName(func_instance *func,
                                     const std::string newName,
-                                    nameType_t nameType) {
-    // DEBUG
-    pdvector<func_instance *> *funcsByName = NULL;
+                                    func_index_t &index) {
+   pdvector<func_instance *> *funcsByName = NULL;
+   
+   auto iter = index.find(newName); 
+   if (iter != index.end()) {
+      funcsByName = iter->second;
+   }
+   else {
+      funcsByName = new std::vector<func_instance *>;
+      index[newName] = funcsByName;
+   }
 
-    if (nameType & mangledName) {
-        if (!allFunctionsByMangledName.find(newName,
-                                            funcsByName)) {
-            funcsByName = new pdvector<func_instance *>;
-            allFunctionsByMangledName[newName] = funcsByName;
-        }
-    }
-    if (nameType & prettyName) {
-        if (!allFunctionsByPrettyName.find(newName,
-                                           funcsByName)) {
-            funcsByName = new pdvector<func_instance *>;
-            allFunctionsByPrettyName[newName] = funcsByName;
-        }
-    }
-    if (nameType & typedName) {
-        return;
-        /*
-          // TODO add?
-        if (!allFunctionsByPrettyName.find(newName,
-                                           funcsByName)) {
-            funcsByName = new pdvector<func_instance *>;
-            allFunctionsByPrettyName[newName] = funcsByName;
-        }
-        */
-    }
-
-    assert(funcsByName != NULL);
-    funcsByName->push_back(func);
+   assert(funcsByName != NULL);
+   funcsByName->push_back(func);
 }
 
 
@@ -791,22 +736,15 @@ void mapped_object::addFunction(func_instance *func) {
          pretty_iter < func->prettyNameVector().size();
          pretty_iter++) {
         string pretty_name = func->prettyNameVector()[pretty_iter];
-        addFunctionName(func, pretty_name.c_str(), prettyName);
+        addFunctionName(func, pretty_name.c_str(), allFunctionsByPrettyName);
     }
 
-    for (unsigned typed_iter = 0;
-         typed_iter < func->typedNameVector().size();
-         typed_iter++) {
-        string typed_name = func->typedNameVector()[typed_iter];
-        addFunctionName(func, typed_name.c_str(), typedName);
-    }
-
-    // And multiple symtab namevs...
+    // And multiple symtab names...
     for (unsigned symtab_iter = 0;
          symtab_iter < func->symTabNameVector().size();
          symtab_iter++) {
         string symtab_name = func->symTabNameVector()[symtab_iter];
-        addFunctionName(func, symtab_name.c_str(), mangledName);
+        addFunctionName(func, symtab_name.c_str(), allFunctionsByMangledName);
     }
 
     func->mod()->addFunction(func);
@@ -816,8 +754,8 @@ void mapped_object::addFunction(func_instance *func) {
 int_variable *mapped_object::findVariable(image_variable *img_var) {
     if (!img_var) return NULL;
 
-    if (everyUniqueVariable.defines(img_var))
-        return everyUniqueVariable[img_var];
+    auto iter = everyUniqueVariable.find(img_var);
+    if (iter != everyUniqueVariable.end()) { return iter->second; }
 
     mapped_module *mod = findModule(img_var->pdmod());
     assert(mod);
@@ -839,11 +777,15 @@ void mapped_object::addVariable(int_variable *var) {
         pdvector<int_variable *> *varsByPrettyEntry = NULL;
 
         // Ensure a vector exists
-        if (!allVarsByPrettyName.find(pretty_name.c_str(),
-                                      varsByPrettyEntry)) {
-            varsByPrettyEntry = new pdvector<int_variable *>;
-            allVarsByPrettyName[pretty_name.c_str()] = varsByPrettyEntry;
+        auto iter = allVarsByPrettyName.find(pretty_name);
+        if (iter == allVarsByPrettyName.end()) {
+           varsByPrettyEntry = new std::vector<int_variable *>;
+           allVarsByPrettyName[pretty_name] = varsByPrettyEntry;
         }
+        else {
+           varsByPrettyEntry = iter->second;
+        }
+
 
         (*varsByPrettyEntry).push_back(var);
     }
@@ -855,11 +797,14 @@ void mapped_object::addVariable(int_variable *var) {
         string symtab_name = var->symTabNameVector()[symtab_iter];
         pdvector<int_variable *> *varsBySymTabEntry = NULL;
 
-        // Ensure a vector exists
-        if (!allVarsByMangledName.find(symtab_name.c_str(),
-                                       varsBySymTabEntry)) {
-            varsBySymTabEntry = new pdvector<int_variable *>;
-            allVarsByMangledName[symtab_name.c_str()] = varsBySymTabEntry;
+        // Ensure a vector exist
+        auto iter = allVarsByMangledName.find(symtab_name);
+        if (iter == allVarsByMangledName.end()) {
+           varsBySymTabEntry = new std::vector<int_variable *>;
+           allVarsByMangledName[symtab_name] = varsBySymTabEntry;
+        }
+        else {
+           varsBySymTabEntry = iter->second;
         }
 
         (*varsBySymTabEntry).push_back(var);
@@ -1001,10 +946,7 @@ void mapped_object::getInferiorHeaps(vector<pair<string, Address> > &foundHeaps)
     vector<pair<string, Address> > data_heaps;
 
     if (!parse_img()->getInferiorHeaps(code_heaps, data_heaps)) {
-#if !defined(os_aix)
-        // AIX: see auxiliary lookup, below.
         return;
-#endif
     }
 
 
@@ -1017,78 +959,6 @@ void mapped_object::getInferiorHeaps(vector<pair<string, Address> > &foundHeaps)
         foundHeaps.push_back(pair<string,Address>(data_heaps[i].first,
                                                   data_heaps[i].second + dataBase()));
     }
-
-    // AIX: we scavenge space. Do that here.
-
-#if defined(os_aix)
-    // ...
-
-    // a.out: from the end of the loader to 0x20000000
-    // Anything in 0x2....: skip
-    // Anything in 0xd....: to the next page
-
-    Address start = 0;
-    unsigned size = 0;
-
-#if 0
-    fprintf(stderr, "Looking for inferior heap in %s/%s, codeAbs 0x%x (0x%x/0x%x)\n",
-            getFileDesc().file().c_str(),
-            getFileDesc().member().c_str(),
-            codeAbs(),
-            codeBase(),
-            codeOffset());
-#endif
-
-    if (codeAbs() >= 0xd0000000) {
-        // This caused problems on sp3-01.cs.wisc.edu; apparently we were overwriting
-        // necessary library information. For now I'm disabling it (10FEB06) until
-        // we can get a better idea of what was going on.
-#if 0
-        start = codeAbs() + imageSize();
-        start += instruction::size() - (start % (Address)instruction::size());
-        size = PAGESIZE - (start % PAGESIZE);
-#endif
-    }
-    else if (codeAbs() > 0x20000000) {
-        // ...
-    }
-    else if (codeAbs() > 0x10000000) {
-        // We also have the loader; there is no information on where
-        // it goes (ARGH) so we pad the end of the code segment to
-        // try and avoid it.
-
-        SymtabAPI::Region *sec;
-        image_->getObject()->findRegion(sec, ".loader");
-        Address loader_end = codeAbs() +
-            //sec.getSecAddr() +
-            image_->getObject()->getLoadOffset() +
-            sec->getDiskSize();
-        //Address loader_end = codeAbs() +
-        //    image_->getObject()->loader_off() +
-        //    image_->getObject()->loader_len();
-        // If we loaded it up in the data segment, don't use...
-        if (loader_end > 0x20000000)
-            loader_end = 0;
-        Address code_end = codeAbs() + imageSize();
-
-        start = (loader_end > code_end) ? loader_end : code_end;
-
-        start += instruction::size() - (start % (Address)instruction::size());
-        size = (0x20000000 - start);
-    }
-
-
-    if (start) {
-        char name_scratch[1024];
-        snprintf(name_scratch, 1023,
-                 "DYNINSTstaticHeap_%i_uncopiedHeap_0x%lx_scratchpage_%s",
-                 (unsigned) size,
-                 start,
-                 fileName().c_str());
-
-        foundHeaps.push_back(pair<string,Address>(string(name_scratch),start));
-    }
-#endif
 }
 
 
@@ -1811,11 +1681,8 @@ bool mapped_object::isExpansionNeeded(Address entry)
         boost::tie(valid, compareStart) = proc()->getMemEm()->translate(compareStart);
         assert(valid);
     }
-#if defined(cap_instruction_api)
     unsigned compareSize = InstructionAPI::InstructionDecoder::maxInstructionLength;
-#else
-    unsigned compareSize = 2 * proc()->getAddressWidth();
-#endif
+
     Address uninitSize = reg->getMemSize() - reg->getDiskSize();
     if (compareSize > uninitSize) {
         compareSize = uninitSize;
@@ -1911,70 +1778,48 @@ void mapped_object::remove(func_instance *func) {
     // remove from func_instance vector
     funcs_.erase(func->ifunc());
 
-    // remove pretty names
-    pdvector<func_instance *> *funcsByName = NULL;
-    for (unsigned pretty_iter = 0;
-         pretty_iter < func->prettyNameVector().size();
-         pretty_iter++)
-    {
-        allFunctionsByPrettyName.find
-            (func->prettyNameVector()[pretty_iter], funcsByName);
-        if (funcsByName) {
-            for (unsigned fIdx=0; fIdx < funcsByName->size(); fIdx++) {
-                if (func == (*funcsByName)[fIdx]) {
-                    unsigned lastIdx = funcsByName->size() -1;
-                    (*funcsByName)[fIdx] = (*funcsByName)[lastIdx];
-                    funcsByName->pop_back();
-                    if (funcsByName->size() == 0) {
-                        allFunctionsByPrettyName.undef
-                            (func->symTabNameVector()[pretty_iter]);
-                    }
-                }
-            }
-        }
-    }
-    // remove typed names
-    for (unsigned typed_iter = 0;
-         typed_iter < func->typedNameVector().size();
-         typed_iter++)
-    {
-        allFunctionsByPrettyName.find
-            (func->typedNameVector()[typed_iter], funcsByName);
-        if (funcsByName) {
-            for (unsigned fIdx=0; fIdx < funcsByName->size(); fIdx++) {
-                if (func == (*funcsByName)[fIdx]) {
-                    unsigned lastIdx = funcsByName->size() -1;
-                    (*funcsByName)[fIdx] = (*funcsByName)[lastIdx];
-                    funcsByName->pop_back();
-                    if (funcsByName->size() == 0) {
-                        allFunctionsByPrettyName.undef
-                            (func->symTabNameVector()[typed_iter]);
-                    }
-                }
-            }
-        }
-    }
     // remove symtab names
-    for (unsigned symtab_iter = 0;
-         symtab_iter < func->symTabNameVector().size();
-         symtab_iter++)
-    {
-        allFunctionsByMangledName.find
-            (func->symTabNameVector()[symtab_iter], funcsByName);
-        if (funcsByName) {
-            for (unsigned fIdx=0; fIdx < funcsByName->size(); fIdx++) {
-                if (func == (*funcsByName)[fIdx]) {
-                    unsigned lastIdx = funcsByName->size() -1;
-                    (*funcsByName)[fIdx] = (*funcsByName)[lastIdx];
-                    funcsByName->pop_back();
-                    if (funcsByName->size() == 0) {
-                        allFunctionsByMangledName.undef
-                            (func->symTabNameVector()[symtab_iter]);
-                    }
-                }
-            }
-        }
+    for (auto name_iter = func->symTabNameVector().begin();
+         name_iter != func->symTabNameVector().end(); 
+         ++name_iter) {
+       auto map_iter = allFunctionsByMangledName.find(*name_iter);
+       if (map_iter == allFunctionsByMangledName.end()) continue;
+       
+       std::vector<func_instance *> &name_vec = *(map_iter->second);
+       for (unsigned i = 0; i < name_vec.size(); ++i) {
+          if (name_vec[i] == func) {
+             name_vec[i] = name_vec.back();
+             name_vec.pop_back();
+             if (name_vec.empty()) {
+                delete map_iter->second;
+                allFunctionsByMangledName.erase(map_iter);
+             }
+             break;
+          }
+       }
     }
+
+    // remove pretty names
+    for (auto name_iter = func->prettyNameVector().begin();
+         name_iter != func->prettyNameVector().end(); 
+         ++name_iter) {
+       auto map_iter = allFunctionsByPrettyName.find(*name_iter);
+       if (map_iter == allFunctionsByPrettyName.end()) continue;
+       
+       std::vector<func_instance *> &name_vec = *(map_iter->second);
+       for (unsigned i = 0; i < name_vec.size(); ++i) {
+          if (name_vec[i] == func) {
+             name_vec[i] = name_vec.back();
+             name_vec.pop_back();
+             if (name_vec.empty()) {
+                delete map_iter->second;
+                allFunctionsByPrettyName.erase(map_iter);
+             }
+             break;
+          }
+       }
+    }
+
 }
 
 void mapped_object::remove(instPoint *point)
@@ -2252,4 +2097,9 @@ void mapped_object::replacePLTStub(SymtabAPI::Symbol *sym, func_instance *orig, 
          proc()->bindPLTEntry(fbt[i], codeBase(), orig, newAddr);
       }
    }
+}
+
+string mapped_object::fileName() const { 
+  return parse_img()->getObject()->name();
+  
 }

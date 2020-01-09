@@ -31,8 +31,8 @@
 #ifndef PCEVENTMUXER_H
 #define PCEVENTMUXER_H
 
-#include "common/h/dthread.h"
-#include "common/h/Types.h"
+#include "common/src/dthread.h"
+#include "common/src/Types.h"
 
 #include "proccontrol/h/Event.h"
 #include "dyninstAPI/h/BPatch_process.h"
@@ -85,7 +85,7 @@ public:
 protected:
     std::map<PCProcess *, int> procCount;
     std::queue<ProcControlAPI::Event::const_ptr> eventQueue;
-    CondVar queueCond;
+    CondVar<> queueCond;
 };
 
 class PCEventHandler;

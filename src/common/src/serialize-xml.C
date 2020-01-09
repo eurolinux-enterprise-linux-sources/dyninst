@@ -28,12 +28,12 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "common/h/serialize.h"
+#include "common/src/serialize.h"
 
 #if !defined(SERIALIZATION_DISABLED)
 
 #if !defined(os_windows)
-#include "common/h/pathName.h"
+#include "common/src/pathName.h"
 #include <dlfcn.h>
 #if defined (cap_have_libxml)
 //libxml2 functions
@@ -49,7 +49,7 @@ HINSTANCE hXML;
 #endif
 
 #if defined (cap_have_libxml)
-#if defined (os_linux) || defined (os_aix)
+#if defined (os_linux)
 //  gcc is complaining about the constness of the library-provided
 //  typecast (BAD_CAST) (which is defined in xmlstring.h), so we make our own
 #define XMLCHAR_CAST (const xmlChar *)

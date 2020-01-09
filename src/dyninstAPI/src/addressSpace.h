@@ -40,12 +40,13 @@
 #include "dyninstAPI/src/trapMappings.h"
 #include <list>
 
-#include "common/h/IntervalTree.h"
+#include "common/src/IntervalTree.h"
 
 #include "parseAPI/h/CodeObject.h"
 #include "parseAPI/h/InstructionSource.h"
 #include "Relocation/Relocation.h"
 #include "Relocation/CodeTracker.h"
+#include "Relocation/Springboard.h"
 #include "Patching.h"
 
 #include "PatchMgr.h"
@@ -307,7 +308,7 @@ class AddressSpace : public InstructionSource {
     // We are unable to determine this if the daemon hasn't yet figured out
     // what libraries are linked against the application.  Currently, we
     // identify an application as being multi-threaded if it is linked against
-    // a thread library (eg. libpthreads.a on AIX).  There are cases where we
+    // a thread library (eg. libpthreads.so on Linux).  There are cases where we
     // are querying whether the app is multi-threaded, but it can't be
     // determined yet but it also isn't necessary to know.
     virtual bool multithread_capable(bool ignore_if_mt_not_set = false) = 0;
@@ -527,7 +528,13 @@ class AddressSpace : public InstructionSource {
     std::map<mapped_object *, FuncSet> modifiedFunctions_;
 
     bool relocateInt(FuncSet::const_iterator begin, FuncSet::const_iterator end, Address near);
-
+    Dyninst::Relocation::InstalledSpringboards::Ptr installedSpringboards_;
+ public:
+    Dyninst::Relocation::InstalledSpringboards::Ptr getInstalledSpringboards() 
+    {
+      return installedSpringboards_;
+    }
+ protected:
     // defensive mode code
     typedef std::pair<Address, unsigned> DefensivePad;
     std::map<Address, std::map<func_instance*,std::set<DefensivePad> > > forwardDefensiveMap_;

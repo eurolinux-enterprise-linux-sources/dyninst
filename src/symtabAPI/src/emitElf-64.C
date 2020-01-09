@@ -39,14 +39,14 @@
 #include "emitElf-64.h"
 #include "emitElfStatic.h"
 #include "debug.h"
-#include "common/h/pathName.h"
+#include "common/src/pathName.h"
 
 #if defined(os_freebsd)
-#include "common/h/freebsdKludges.h"
+#include "common/src/freebsdKludges.h"
 #endif
 
 #if defined(os_linux)
-#include "common/h/linuxKludges.h"
+#include "common/src/linuxKludges.h"
 #endif
 
 extern void symtab_log_perror(const char *msg);
@@ -140,16 +140,17 @@ bool emitElf64::cannotRelocatePhdrs()
 static int elfSymType(Symbol *sym)
 {
   switch (sym->getType()) {
-  case Symbol::ST_MODULE: return STT_FILE;
-  case Symbol::ST_SECTION: return STT_SECTION;
-  case Symbol::ST_OBJECT: return STT_OBJECT;
-  case Symbol::ST_FUNCTION: return STT_FUNC;
-  case Symbol::ST_TLS: return STT_TLS;
-  case Symbol::ST_NOTYPE : return STT_NOTYPE;
-  case Symbol::ST_UNKNOWN: return sym->getInternalType();
+     case Symbol::ST_MODULE: return STT_FILE;
+     case Symbol::ST_SECTION: return STT_SECTION;
+     case Symbol::ST_OBJECT: return STT_OBJECT;
+     case Symbol::ST_FUNCTION: return STT_FUNC;
+     case Symbol::ST_TLS: return STT_TLS;
+     case Symbol::ST_NOTYPE : return STT_NOTYPE;
+     case Symbol::ST_UNKNOWN: return sym->getInternalType();
+#if defined(STT_GNU_IFUNC)
      case Symbol::ST_INDIRECT: return STT_GNU_IFUNC;
-
-  default: return STT_SECTION;
+#endif
+     default: return STT_SECTION;
   }
 }
 
@@ -175,30 +176,26 @@ static int elfSymVisibility(Symbol::SymbolVisibility sVisibility)
 }
 
 emitElf64::emitElf64(Elf_X *oldElfHandle_, bool isStripped_, Object *obj_, void (*err_func)(const char *)) :
-   oldElfHandle(oldElfHandle_),
-   phdrs_scn(NULL),
-   isStripped(isStripped_),
-   object(obj_),
-   err_func_(err_func)
+   oldElfHandle(oldElfHandle_), newElf(NULL), oldElf(NULL),
+   newEhdr(NULL), oldEhdr(NULL),
+   newPhdr(NULL), oldPhdr(NULL), phdr_offset(0),
+   textData(NULL), symStrData(NULL), dynStrData(NULL),
+   olddynStrData(NULL), olddynStrSize(0),
+   symTabData(NULL), dynsymData(NULL), dynData(NULL),
+   phdrs_scn(NULL), verneednum(0), verdefnum(0),
+   newSegmentStart(0), firstNewLoadSec(NULL),
+   dataSegEnd(0), dynSegOff(0), dynSegAddr(0),
+   phdrSegOff(0), phdrSegAddr(0), dynSegSize(0),
+   secNameIndex(0), currEndOffset(0), currEndAddress(0),
+   linkedStaticData(NULL), loadSecTotalSize(0),
+   isStripped(isStripped_), library_adjust(0),
+   object(obj_), err_func_(err_func),
+   hasRewrittenTLS(false), TLSExists(false), newTLSData(NULL)
 {
-  firstNewLoadSec = NULL;
-  textData = NULL;
-  symStrData = NULL;
-  symTabData = NULL;
-  dynsymData = NULL;
-  dynStrData = NULL;
-  hashData = NULL;
-  rodata = NULL;
- 
-  linkedStaticData = NULL;
-  hasRewrittenTLS = false;
-  TLSExists = false;
-  newTLSData = NULL;
-   
   oldElf = oldElfHandle->e_elfp();
   curVersionNum = 2;
   setVersion();
- 
+
   //Set variable based on the mechanism to add new load segment
   // 1) createNewPhdr (Total program headers + 1) - default
   //	(a) movePHdrsFirst
@@ -465,7 +462,21 @@ void emitElf64::renameSection(const std::string &oldStr, const std::string &newS
   }
 }
 
-bool emitElf64::driver(Symtab *obj, string fName){
+bool emitElf64::driver(Symtab *obj, string fName)
+{
+  std::vector<ExceptionBlock*> exceptions;
+  obj->getAllExceptions(exceptions);
+  //  cerr << "Dumping exception info: " << endl;
+  
+  for(auto eb = exceptions.begin();
+      eb != exceptions.end();
+      ++eb)
+  {
+    //cerr << **eb << endl;
+  }
+  
+
+
   int newfd;
   Region *foundSec = NULL;
   unsigned pgSize = getpagesize();
@@ -1061,13 +1072,18 @@ void emitElf64::fixPhdrs(unsigned &extraAlignSize)
 
         if(movePHdrsFirst) {
            if (!old->p_offset) {
-              if (newPhdr->p_vaddr)
+	     if (newPhdr->p_vaddr) 
+	     {
                  newPhdr->p_vaddr = old->p_vaddr - pgSize;
+		 newPhdr->p_align = pgSize;
+	     }
+	     
 	      newPhdr->p_paddr = newPhdr->p_vaddr;
 	      newPhdr->p_filesz += pgSize;
 	      newPhdr->p_memsz = newPhdr->p_filesz;
            } else {
               newPhdr->p_offset += pgSize;
+	      newPhdr->p_align = pgSize;
            }
            if (newPhdr->p_vaddr) {
               newPhdr->p_vaddr += library_adjust;
@@ -1089,7 +1105,7 @@ void emitElf64::fixPhdrs(unsigned &extraAlignSize)
              && old->p_offset && newEhdr->e_phnum >= oldEhdr->e_phnum)
      {
          newPhdr->p_offset += 
-             oldEhdr->e_phentsize*(newEhdr->e_phnum-oldEhdr->e_phnum);
+             (Elf64_Off)oldEhdr->e_phentsize * (Elf64_Off)(newEhdr->e_phnum-oldEhdr->e_phnum);
      }
      else if (movePHdrsFirst && old->p_offset) {
         newPhdr->p_offset += pgSize;
@@ -1142,7 +1158,7 @@ void emitElf64::fixPhdrs(unsigned &extraAlignSize)
   // libelf from overwriting the program headers data when outputing
   // sections.  Fill in the new section's data with what we just wrote.
   Elf_Data *data = elf_newdata(phdrs_scn);
-  size_t total_size = newEhdr->e_phnum * newEhdr->e_phentsize;
+  size_t total_size = (size_t)newEhdr->e_phnum * (size_t)newEhdr->e_phentsize;
   data->d_buf = malloc(total_size);
   memcpy(data->d_buf, phdr_data, total_size);
   data->d_size = total_size;
@@ -1283,6 +1299,7 @@ bool emitElf64::createLoadableSections(Symtab *obj, Elf64_Shdr* &shdr, unsigned 
            break;
         case Region::RT_BSS:
            newshdr->sh_type = SHT_NOBITS;
+           //FALLTHROUGH
         case Region::RT_DATA:
            newshdr->sh_flags = SHF_WRITE | SHF_ALLOC;
            break;
@@ -1480,7 +1497,11 @@ bool emitElf64::createLoadableSections(Symtab *obj, Elf64_Shdr* &shdr, unsigned 
               newshdr->sh_size);
 	    
       newdata->d_version = 1;
-
+      if (newshdr->sh_addralign < newdata->d_align) 
+      {
+	newshdr->sh_addralign = newdata->d_align;
+      }
+      
      if (0 > elf_update(newElf, ELF_C_NULL))
      {
        fprintf(stderr, "%s[%d]:  elf_update failed: %d, %s\n", FILE__, __LINE__, errno, elf_errmsg(elf_errno()));
@@ -2223,10 +2244,16 @@ void emitElf64::createRelocationSections(Symtab *obj, std::vector<relocationEntr
       dsize_type = DT_PLTRELSZ;
       buffer = relas;
    }
-if(dynamicSecData.find(dsize_type) != dynamicSecData.end())
-   old_reloc_size =  dynamicSecData[dsize_type][0]->d_un.d_val;
-else
-   old_reloc_size = 0;
+
+   if (buffer == NULL) {
+      log_elferror(err_func_, "Unknown relocation type encountered");
+      return;
+   }
+
+   if(dynamicSecData.find(dsize_type) != dynamicSecData.end())
+      old_reloc_size =  dynamicSecData[dsize_type][0]->d_un.d_val;
+   else
+      old_reloc_size = 0;
    dynamic_reloc_size = old_reloc_size+  l*sizeof(Elf64_Rel)+ m*sizeof(Elf64_Rela);
    string name;
    if (secTagRegionMapping.find(dtype) != secTagRegionMapping.end())
@@ -2554,7 +2581,7 @@ void emitElf64::createDynamicSection(void *dynData, unsigned size, Elf64_Dyn *&d
     dynsecData[curpos].d_tag = DT_NULL;
   dynsecData[curpos].d_un.d_val = 0;
   curpos++;
-  dynsecSize = curpos+1;                            //assign size to the correct number of entries
+  dynsecSize = curpos;
 }
 
 

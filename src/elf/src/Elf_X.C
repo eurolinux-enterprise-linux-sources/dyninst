@@ -40,7 +40,7 @@
 #include <boost/assign/std/set.hpp>
 #include <boost/assign/std/vector.hpp>
 
-#include "common/h/headers.h"
+#include "common/src/headers.h"
 #include "elf/h/Elf_X.h"
 #include <iostream>
 #include <iomanip>
@@ -116,7 +116,7 @@ Elf_X::Elf_X()
 { }
 
 Elf_X::Elf_X(int input, Elf_Cmd cmd, Elf_X *ref)
-    : ehdr32(NULL), ehdr64(NULL), phdr32(NULL), phdr64(NULL),
+    : elf(NULL), ehdr32(NULL), ehdr64(NULL), phdr32(NULL), phdr64(NULL),
       filedes(input), is64(false), isArchive(false), ref_count(1),
       cached_debug_buffer(NULL), cached_debug_size(0), cached_debug(false)
 {
@@ -161,8 +161,8 @@ Elf_X::Elf_X(int input, Elf_Cmd cmd, Elf_X *ref)
 }
 
 Elf_X::Elf_X(char *mem_image, size_t mem_size)
-    : ehdr32(NULL), ehdr64(NULL), phdr32(NULL), phdr64(NULL),
-      is64(false), isArchive(false), ref_count(1),
+    : elf(NULL), ehdr32(NULL), ehdr64(NULL), phdr32(NULL), phdr64(NULL),
+      filedes(-1), is64(false), isArchive(false), ref_count(1),
       cached_debug_buffer(NULL), cached_debug_size(0), cached_debug(false)
 {
     if (elf_version(EV_CURRENT) == EV_NONE) {
@@ -230,6 +230,7 @@ Elf_X::~Elf_X()
   for (auto iter = elf_x_by_ptr.begin(); iter != elf_x_by_ptr.end(); ++iter) {
     if (iter->second == this) {
       elf_x_by_ptr.erase(iter);
+      return;
     }
   }
 }
@@ -727,8 +728,8 @@ void Elf_X_Shdr::sh_flags(unsigned long input)
 
 void Elf_X_Shdr::sh_addr(unsigned long input)
 {
-    if (!is64) shdr32->sh_flags = input;
-    else       shdr64->sh_flags = input;
+    if (!is64) shdr32->sh_addr = input;
+    else       shdr64->sh_addr = input;
 }
 
 void Elf_X_Shdr::sh_offset(unsigned long input)
@@ -925,13 +926,6 @@ Elf_X_Sym Elf_X_Data::get_sym()
 {
     return Elf_X_Sym(is64, data);
 }
-
-#if defined(arch_mips)
-Elf_X_Options Elf_X_Data::get_options()
-{
-    return Elf_X_Options(is64, data);
-}
-#endif
 
 bool Elf_X_Data::isValid() const
 {
@@ -1789,6 +1783,6 @@ Elf_X_Nhdr Elf_X_Nhdr::next() const
     if (!isValid())
         return Elf_X_Nhdr();
 
-    size_t offset = (char *)get_desc() + n_descsz() - (char *)data->d_buf;
+    size_t offset = (const char *)get_desc() + n_descsz() - (char *)data->d_buf;
     return Elf_X_Nhdr(data, offset);
 }

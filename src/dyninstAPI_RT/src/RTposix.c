@@ -56,11 +56,7 @@
 #include "dyninstAPI_RT/src/RTcommon.h"
 #include "dyninstAPI_RT/src/RTheap.h"
 
-#if defined (os_osf)
-#define SOCKLEN_T size_t
-#else
 #define SOCKLEN_T socklen_t
-#endif
 
 #if !(defined(arch_power) && defined(os_linux))
 void RTmutatedBinary_init() 
@@ -94,21 +90,8 @@ void libdyninstAPI_RT_init()
    if (initCalledOnce) return;
    initCalledOnce++;
 
-#if defined(arch_x86) || defined(arch_x86_64)
-   /* Modern x86-32/x86-64 cpus have non-executable data */
-   mark_heaps_exec();
-#endif
-
-   /* RTmutatedBinary_init(); */
-   
-   if (libdyninstAPI_RT_init_localCause != -1 && 
-       libdyninstAPI_RT_init_localPid != -1 &&
-       libdyninstAPI_RT_init_maxthreads != -1)
-   {
-      DYNINSTinit(libdyninstAPI_RT_init_localCause, libdyninstAPI_RT_init_localPid,
-                  libdyninstAPI_RT_init_maxthreads, libdyninstAPI_RT_init_debug_flag);
-   }
-
+  
+   DYNINSTinit();
    rtdebug_printf("%s[%d]:  did DYNINSTinit\n", __FILE__, __LINE__);
 }
 
@@ -228,7 +211,7 @@ int DYNINSTasyncDisconnect()
 
 int DYNINSTwriteEvent(void *ev, size_t sz)
 {
-  int res;
+  ssize_t res;
 
   if (DYNINSTstaticMode)
      return 0;
@@ -250,10 +233,10 @@ try_again:
        return -1;
     }
   }
-  if (res != sz) {
+  if ((size_t)res != sz) {
     /*  maybe we need logic to handle partial writes? */
-    fprintf(stderr, "%s[%d]:  partial ? write error, %d bytes, should be %d\n",
-            __FILE__, __LINE__, res, (int) sz);
+    fprintf(stderr, "%s[%d]:  partial ? write error, %zd bytes, should be %zu\n",
+            __FILE__, __LINE__, res, sz);
     return -1;
   }
   return 0;
@@ -292,4 +275,5 @@ int DYNINSTinitializeTrapHandler()
    result = sigaction(SIGTRAP, &new_handler, NULL);
    return (result == 0) ? 1 /*Success*/ : 0 /*Fail*/ ;
 }
+
 #endif

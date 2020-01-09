@@ -34,11 +34,11 @@
 #if !defined(_R_CODE_TRACKER_H_)
 #define _R_CODE_TRACKER_H_
 
-#include "dynutil/h/dyntypes.h"
+#include "common/h/dyntypes.h"
 #include <vector>
 #include <set>
 #include <list>
-#include "common/h/IntervalTree.h"
+#include "common/src/IntervalTree.h"
 
 // Remove when I'm done debugging this...
 //#include "dyninstAPI/src/baseTramp.h"
@@ -127,12 +127,14 @@ class EmulatorTracker : public TrackerElement {
   virtual ~EmulatorTracker() {};
 
   virtual Address relocToOrig(Address reloc) const {
+    (void)reloc; // unused
     assert(reloc >= reloc_);
     assert(reloc < (reloc_ + size_));
     return orig_;
   }
 
   virtual Address origToReloc(Address orig) const {
+    (void)orig; // unused
     assert(orig == orig_);
     return reloc_;
   }
@@ -151,12 +153,14 @@ class InstTracker : public TrackerElement {
   virtual ~InstTracker() {};
 
   virtual Address relocToOrig(Address reloc) const {
+    (void)reloc; // unused
     assert(reloc >= reloc_);
     assert(reloc < (reloc_ + size_));
     return orig_;
   }
 
   virtual Address origToReloc(Address orig) const {
+    (void)orig; // unused
     assert(orig == orig_);
     return reloc_;
   }
@@ -177,12 +181,14 @@ class PaddingTracker : public TrackerElement {
    virtual ~PaddingTracker() {};
 
   virtual Address relocToOrig(Address reloc) const {
+    (void)reloc; // unused
     assert(reloc >= reloc_);
     assert(reloc < (reloc_ + size_));
     return orig_;
   }
 
   virtual Address origToReloc(Address orig) const {
+    (void)orig; // unused
     assert(orig == orig_);
     return reloc_;
   }

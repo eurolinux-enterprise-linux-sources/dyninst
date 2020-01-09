@@ -244,7 +244,7 @@ bool SymtabReader::isValidSection(Section_t sec)
 
 void *SymtabReader::getElfHandle()
 {
-#if defined(os_solaris) || defined(os_linux) || defined(os_bg) || defined(os_freebsd) || defined(os_vxworks)
+#if defined(os_linux) || defined(os_bg) || defined(os_freebsd) || defined(os_vxworks)
    Object *obj = symtab->getObject();
    return obj->getElfHandle();
 #else
@@ -271,6 +271,10 @@ SymReader *SymtabReaderFactory::openSymbolReader(std::string pathname)
    SymtabReader *symtabreader = new SymtabReader(pathname);
    if (!symtabreader) { 
       return NULL;
+   }
+   if(!symtabreader->symtab) {
+     delete symtabreader;
+     return NULL;
    }
    open_syms[pathname] = symtabreader;
 

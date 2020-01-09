@@ -1,0 +1,44 @@
+From b37d305d0421017b61235e9c2015f3e45f082161 Mon Sep 17 00:00:00 2001
+From: Josh Stone <jistone@redhat.com>
+Date: Thu, 16 Oct 2014 17:42:58 -0700
+Subject: [PATCH] cmake: Properly extend BUG_DEFINES on ppc linux
+
+Both ppc32_linux and ppc64_linux set -Dbug_registers_after_exit in
+BUG_DEFINES, but in doing so they clobbered the general linux bugs.  In
+particular, -Dbug_syscall_changepc_rewind is still needed.  This patch
+lets ppc just add its definition while keeping the others.
+
+Our RHEL7 QA noticed this as a regression from 8.1.2, so I believe it
+just broke as part of the transition to cmake.  In their smoke test, a
+mutatee process in sleep() is attached, and it promptly crashes SIGILL
+on the first iRPC.  I found that the iRPC was at 0x3fffb1f70000, and
+proccontrol is setting that pc, but the crash is at 0x3fffb1f6fffc.  So
+that appears to be the rewind issue, and a full BUG_DEFINES fixes it.
+
+Reported-by: Michael Petlan <mpetlan@redhat.com>
+Signed-off-by: Josh Stone <jistone@redhat.com>
+---
+ cmake/cap_arch_def.cmake | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/cmake/cap_arch_def.cmake b/cmake/cap_arch_def.cmake
+index a27be73e3652..d685532dcd2f 100644
+--- a/cmake/cap_arch_def.cmake
++++ b/cmake/cap_arch_def.cmake
+@@ -112,11 +112,11 @@ set (OLD_DEFINES -Dx86_64_unknown_linux2_4)
+ 
+ elseif (PLATFORM STREQUAL ppc32_linux)
+ set (OLD_DEFINES -Dppc32_linux)
+-set (BUG_DEFINES -Dbug_registers_after_exit)
++set (BUG_DEFINES ${BUG_DEFINES} -Dbug_registers_after_exit)
+ 
+ elseif (PLATFORM STREQUAL ppc64_linux)
+ set (OLD_DEFINES -Dppc64_linux)
+-set (BUG_DEFINES ${BUG_DEF} -Dbug_registers_after_exit)
++set (BUG_DEFINES ${BUG_DEFINES} -Dbug_registers_after_exit)
+ 
+ elseif (PLATFORM STREQUAL ppc64_bgq_ion)
+ set (OLD_DEFINES -Dppc64_bluegene -Dppc64_linux)
+-- 
+1.8.3.1
+

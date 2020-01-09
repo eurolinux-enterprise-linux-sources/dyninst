@@ -31,11 +31,11 @@
 #if !defined(SYMTAB_SWK_H_)
 #define SYMTAB_SWK_H_
 
-#if defined(cap_stackwalker_use_symtab)
+#if defined(WITH_SYMTAB_API)
 
 #include "stackwalk/h/framestepper.h"
 #include "symtabAPI/h/Symtab.h"
-#include "dynutil/h/dyntypes.h"
+#include "common/h/dyntypes.h"
 #include "stackwalk/h/procstate.h"
 #include "symtabAPI/h/AddrLookup.h"
 #include "symtabAPI/h/Function.h"

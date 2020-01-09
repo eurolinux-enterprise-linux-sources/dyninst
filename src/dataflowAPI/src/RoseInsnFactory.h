@@ -36,7 +36,7 @@
 #include "external/rose/rose-compat.h"
 #include "external/rose/powerpcInstructionEnum.h"
 #include "Visitor.h"
-#include "dynutil/h/util.h"
+#include "common/h/util.h"
 #include "boost/shared_ptr.hpp"
 #include <vector>
 
@@ -109,7 +109,7 @@ class RoseInsnX86Factory : public RoseInsnFactory {
 
   class RoseInsnPPCFactory : public RoseInsnFactory {
   public:
-    DATAFLOW_EXPORT RoseInsnPPCFactory(void) {};
+    DATAFLOW_EXPORT RoseInsnPPCFactory(void): kind(powerpc_unknown_instruction) {};
     DATAFLOW_EXPORT virtual ~RoseInsnPPCFactory(void) {};
 
   private:

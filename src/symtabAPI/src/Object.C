@@ -32,7 +32,7 @@
 
 #include "symutil.h"
 #include "Annotatable.h"
-#include "common/h/serialize.h"
+#include "common/src/serialize.h"
 
 #include "Symtab.h"
 #include "Module.h"
@@ -233,8 +233,9 @@ SYMTAB_EXPORT ExceptionBlock::~ExceptionBlock()
 {
 }
 
-SYMTAB_EXPORT ExceptionBlock::ExceptionBlock() : tryStart_(0), trySize_(0), 
-								catchStart_(0), hasTry_(false) 
+SYMTAB_EXPORT ExceptionBlock::ExceptionBlock() :
+  tryStart_(0), trySize_(0), catchStart_(0), hasTry_(false),
+  tryStart_ptr(0), tryEnd_ptr(0), catchStart_ptr(0), fdeStart_ptr(0), fdeEnd_ptr(0)
 {
 }
 
@@ -388,23 +389,18 @@ SYMTAB_EXPORT AObject::~AObject()
 
 // explicitly protected
 SYMTAB_EXPORT AObject::AObject(MappedFile *mf_, void (*err_func)(const char *)) 
-: mf(mf_), code_ptr_(0), code_off_(0),
-   code_len_(0), data_ptr_(0), data_off_(0), data_len_(0),loader_off_(0),
-  loader_len_(0), is_dynamic_(false), has_error(false), is_static_binary_(false), deferredParse(false), err_func_(err_func),
-   addressWidth_nbytes(4) 
+: mf(mf_),
+   code_ptr_(0), code_off_(0), code_len_(0),
+   data_ptr_(0), data_off_(0), data_len_(0),
+   code_vldS_(0), code_vldE_(0),
+   data_vldS_(0), data_vldE_(0),
+   loader_off_(0), loader_len_(0),
+   is_aout_(false), is_dynamic_(false),
+   has_error(false), is_static_binary_(false),
+   no_of_sections_(0), no_of_symbols_(0),
+   deferredParse(false), err_func_(err_func), addressWidth_nbytes(4)
 {
 }
-
-SYMTAB_EXPORT AObject::AObject(const AObject &obj)
-: mf(obj.mf), symbols_(obj.symbols_), 
-   code_ptr_(obj.code_ptr_), code_off_(obj.code_off_), 
-   code_len_(obj.code_len_), data_ptr_(obj.data_ptr_), 
-   data_off_(obj.data_off_), data_len_(obj.data_len_), 
-   loader_off_(obj.loader_off_), loader_len_(obj.loader_len_), is_dynamic_(obj.is_dynamic_),
-   has_error(obj.has_error), is_static_binary_(obj.is_static_binary_), 
-   deferredParse(false), err_func_(obj.err_func_), addressWidth_nbytes(4)
-{
-} 
 
 //  a helper routine that selects a language based on information from the symtab
 supportedLanguages AObject::pickLanguage(string &working_module, char *working_options,
@@ -459,7 +455,7 @@ supportedLanguages AObject::pickLanguage(string &working_module, char *working_o
             char *next_dot = strchr(dbg_gen_ver_maj, '.');
             if (NULL != next_dot)
             {
-               next_dot = '\0';  //terminate major version number string
+               *next_dot = '\0';  //terminate major version number string
                int ver_maj = atoi(dbg_gen_ver_maj);
                //cerr <<"Major Debug Ver. "<<ver_maj<< endl;
                if (ver_maj < 3)

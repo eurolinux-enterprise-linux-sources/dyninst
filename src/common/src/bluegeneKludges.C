@@ -28,7 +28,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <common/h/headers.h>
+#include <common/src/headers.h>
 
 // taken from LinuxKludges.C.
 // TODO: put this in some common place?  It's used by at least 2 platforms.
@@ -57,6 +57,10 @@ char * P_cplus_demangle( const char * symbol, bool nativeCompiler, bool includeT
 
 
 #if !defined(os_bg_compute)
+
+#define getVMMaps getLinuxMaps
+COMMON_EXPORT map_entries *getLinuxMaps(int pid, unsigned &maps_size);
+
 #include "parseauxv.h"
 #include "auxvtypes.h"
 

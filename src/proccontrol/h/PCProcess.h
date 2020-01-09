@@ -64,6 +64,7 @@ class MTLock;
 
 #define PC_VERSION_8_0_0
 #define PC_VERSION_8_1_0
+#define PC_VERSION_8_2_0
 
 #define pc_const_cast boost::const_pointer_cast
 
@@ -73,7 +74,7 @@ class SymbolReaderFactory;
 
 namespace ProcControlAPI {
 
-   extern bool is_restricted_ptrace;
+   extern PC_EXPORT bool is_restricted_ptrace;
   
 
 class Process;
@@ -93,6 +94,9 @@ class LWPTracking;
 class CallStackUnwinding;
 class FollowFork;
 class SignalMask;
+class BGQData;
+class RemoteIO;
+class MemoryUsage;
 
 class ExecFileInfo;
 
@@ -144,6 +148,7 @@ class PC_EXPORT Library
    typedef boost::shared_ptr<const Library> const_ptr;
 
    std::string getName() const;
+   std::string getAbsoluteName() const;
    Dyninst::Address getLoadAddress() const;
    Dyninst::Address getDataLoadAddress() const;
    Dyninst::Address getDynamicAddress() const;
@@ -467,8 +472,7 @@ class PC_EXPORT Process : public boost::enable_shared_from_this<Process>
     **/
    Dyninst::Address findFreeMemory(size_t size);
 
-   bool getMemoryAccessRights(Dyninst::Address addr, size_t size,
-                              mem_perm& rights);
+   bool getMemoryAccessRights(Dyninst::Address addr, mem_perm& rights);
    bool setMemoryAccessRights(Dyninst::Address addr, size_t size,
                               mem_perm rights, mem_perm& oldRights);
 
@@ -526,12 +530,18 @@ class PC_EXPORT Process : public boost::enable_shared_from_this<Process>
    LWPTracking *getLWPTracking();
    FollowFork *getFollowFork();
    SignalMask *getSignalMask();
+   BGQData *getBGQ();
+   RemoteIO *getRemoteIO();
+   MemoryUsage *getMemoryUsage();
    const LibraryTracking *getLibraryTracking() const;
    const ThreadTracking *getThreadTracking() const;
    const LWPTracking *getLWPTracking() const;
    const FollowFork *getFollowFork() const;
    const SignalMask *getSignalMask() const;
-   
+   const BGQData *getBGQ() const;
+   const RemoteIO *getRemoteIO() const;
+   const MemoryUsage *getMemoryUsage() const;
+
    /**
     * Errors that occured on this process
     **/
@@ -544,7 +554,7 @@ class PC_EXPORT Process : public boost::enable_shared_from_this<Process>
 	ExecFileInfo* getExecutableInfo() const;
 };
 
-class PC_EXPORT Thread
+class PC_EXPORT Thread : public boost::enable_shared_from_this<Thread>
 {
  protected:
    friend class ::int_thread;
@@ -582,8 +592,11 @@ class PC_EXPORT Thread
    bool stopThread();
    bool continueThread();
 
-   void setSingleStepMode(bool s) const;
+   bool setSingleStepMode(bool s) const;
    bool getSingleStepMode() const;
+
+   bool setSyscallMode(bool s) const;
+   bool getSyscallMode() const;
 
    bool getRegister(Dyninst::MachRegister reg, Dyninst::MachRegisterVal &val) const;
    bool getAllRegisters(RegisterPool &pool) const;

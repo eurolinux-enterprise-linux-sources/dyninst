@@ -31,7 +31,7 @@
 // $Id: Object.C,v 1.31 2008/11/03 15:19:25 jaw Exp $
 
 #include "Annotatable.h"
-#include "common/h/serialize.h"
+#include "common/src/serialize.h"
 
 #include "Symtab.h"
 #include "symutil.h"
@@ -192,7 +192,7 @@ bool Variable::operator==(const Variable &v)
 		{
 			return false;
 		}
-	return ((Aggregate &)(*this)) == ((Aggregate &)v);
+	return ((Aggregate &)(*this)) == ((const Aggregate &)v);
 }
 
 bool Variable::removeSymbol(Symbol *sym) 
@@ -205,7 +205,7 @@ bool Variable::removeSymbol(Symbol *sym)
 }
 
 localVar::localVar(std::string name,  Type *typ, std::string fileName, 
-		int lineNum, Function *f, std::vector<VariableLocation> *locs) :
+		int lineNum, FunctionBase *f, std::vector<VariableLocation> *locs) :
 	Serializable(),
 	name_(name), 
 	type_(typ), 

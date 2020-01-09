@@ -96,7 +96,7 @@ class HandlerPool
    static void markProcAsyncPending(HandlerPool *p);
    static void clearProcAsyncPending(HandlerPool *p);
    static std::set<HandlerPool *> procsAsyncPending;
-   static Mutex asyncPendingLock;
+   static Mutex<false> asyncPendingLock;
 };
 
 class HandlePreBootstrap : public Handler
@@ -266,6 +266,26 @@ class HandleSingleStep : public Handler
   virtual handler_ret_t handleEvent(Event::ptr ev);
 };
 
+class HandlePreSyscall : public Handler
+{
+ public:
+  HandlePreSyscall();
+  virtual ~HandlePreSyscall();
+
+  virtual void getEventTypesHandled(std::vector<EventType> &etypes);
+  virtual handler_ret_t handleEvent(Event::ptr ev);
+};
+
+class HandlePostSyscall : public Handler
+{
+ public:
+  HandlePostSyscall();
+  virtual ~HandlePostSyscall();
+
+  virtual void getEventTypesHandled(std::vector<EventType> &etypes);
+  virtual handler_ret_t handleEvent(Event::ptr ev);
+};
+
 class HandleBreakpoint : public Handler
 {
  public:
@@ -358,6 +378,16 @@ class HandleAsyncIO : public Handler
    virtual void getEventTypesHandled(std::vector<EventType> &etypes);
 };
 
+class HandleAsyncFileRead : public Handler
+{
+  public:
+   HandleAsyncFileRead();
+   virtual ~HandleAsyncFileRead();
+
+   virtual handler_ret_t handleEvent(Event::ptr ev);
+   virtual void getEventTypesHandled(std::vector<EventType> &etypes);
+};
+
 class HandleNop : public Handler
 {
   public:
@@ -401,6 +431,16 @@ class HandleCallbacks : public Handler
   bool requiresCB(Event::const_ptr ev);
 
   static void getRealEvents(EventType ev, std::vector<EventType> &out_evs);
+};
+
+class HandlePostponedSyscall : public Handler
+{
+ public:
+  HandlePostponedSyscall();
+  virtual ~HandlePostponedSyscall();
+
+  virtual void getEventTypesHandled(std::vector<EventType> &etypes);
+  virtual handler_ret_t handleEvent(Event::ptr ev);
 };
 
 

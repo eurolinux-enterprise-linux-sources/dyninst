@@ -38,7 +38,7 @@
 #include "dynThread.h"
 #include "function.h"
 
-#include "common/h/pathName.h"
+#include "common/src/pathName.h"
 
 #include <sstream>
 
@@ -102,9 +102,9 @@ std::string PCProcess::createExecPath(const std::string &file, const std::string
 // We are unable to determine this if the daemon hasn't yet figured out what
 // libraries are linked against the application.  Currently, we identify an
 // application as being multi-threaded if it is linked against a thread
-// library (eg. libpthreads.a on AIX).  There are cases where we are querying
-// whether the app is multi-threaded, but it can't be determined yet but it
-// also isn't necessary to know.
+// library (eg. libpthreads.so on Linux).  There are cases where we are
+// querying whether the app is multi-threaded, but it can't be determined
+// yet but it also isn't necessary to know.
 bool PCProcess::multithread_capable(bool ignoreIfMtNotSet) {
     if( mt_cache_result_ != not_cached ) {
         if( mt_cache_result_ == cached_mt_true) return true;
@@ -116,9 +116,7 @@ bool PCProcess::multithread_capable(bool ignoreIfMtNotSet) {
         return false;
     }
 
-    if(    findObject("libthread.so*", true) // Solaris
-        || findObject("libpthreads.*", true) // AIX
-        || findObject("libpthread.so*", true) // Linux
+    if(    findObject("libpthread.so*", true) // Linux
         || findObject("libpthread-*.so", true) // Linux
         || findObject("libthr.*", true) ) // FreeBSD
     {
@@ -193,7 +191,7 @@ bool PCProcess::instrumentMTFuncs() {
 }
 
 bool PCEventHandler::shouldStopForSignal(int signal) {
-    if( signal == SIGSTOP || signal == SIGINT ) return true;
+    if( signal == SIGSTOP ) return true;
     return false;
 }
 
@@ -283,11 +281,10 @@ bool PCProcess::setMemoryAccessRights(Address start, size_t size,
     return false;
 }
 
-bool PCProcess::getMemoryAccessRights(Address start, size_t size,
-                                      PCMemPerm& rights) {
-    mal_printf("getMemoryAccessRights to %s [%lx %lx]\n",
-               rights.getPermName().c_str(), start, start+size);
+bool PCProcess::getMemoryAccessRights(Address start, PCMemPerm& rights) {
+    mal_printf("getMemoryAccessRights at %lx\n", start);
     assert(!"Not implemented yet");
+    (void)rights; // unused parameter
     return false;
 }
 
@@ -302,6 +299,7 @@ void PCProcess::redirectFds(int stdin_fd, int stdout_fd, int stderr_fd,
 bool PCProcess::setEnvPreload(std::vector<std::string> &envp, std::string fileName) {
     const unsigned int ERROR_CODE = 101;
     bool use_abi_rt = false;
+    (void)fileName; // unused
 
 #if defined(arch_64bit)
     SymtabAPI::Symtab *symt_obj;
@@ -447,7 +445,7 @@ bool PCProcess::hasPassedMain()
    for(LibraryPool::const_iterator i = libraries.begin(); i != libraries.end();
            ++i)
    {
-       if( (*i)->getName() == derefPath ) {
+       if( (*i)->getAbsoluteName() == derefPath ) {
            foundDynLinker = true;
            ldso_start_addr = (*i)->getLoadAddress();
        }
@@ -913,7 +911,7 @@ Address PCProcess::setAOutLoadAddress(fileDescriptor &desc) {
    startup_printf("[%s:%u] - a.out is a shared library, computing load addr\n",
                   FILE__, __LINE__);
    memset(&aout, 0, sizeof(aout));
-   result = stat(pcProc_->libraries().getExecutable()->getName().c_str(), &aout);
+   result = stat(pcProc_->libraries().getExecutable()->getAbsoluteName().c_str(), &aout);
    if (result == -1) {
       startup_printf("[%s:%u] - setAOutLoadAddress couldn't stat %s: %s\n",
                      FILE__, __LINE__, proc_path, strerror(errno));

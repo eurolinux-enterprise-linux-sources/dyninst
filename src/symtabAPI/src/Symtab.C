@@ -12,7 +12,6 @@
  * under no obligation to provide either maintenance services,
  * update services, notices of latent defects, or correction of
  * defects for Paradyn.
- * 
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
@@ -37,10 +36,10 @@
 #include <iomanip>
 #include <sstream>
 
-#include "common/h/Timer.h"
-#include "common/h/debugOstream.h"
-#include "common/h/serialize.h"
-#include "common/h/pathName.h"
+#include "common/src/Timer.h"
+#include "common/src/debugOstream.h"
+#include "common/src/serialize.h"
+#include "common/src/pathName.h"
 
 #include "Serialization.h"
 #include "Symtab.h"
@@ -72,8 +71,8 @@ static std::string errMsg;
 extern bool parseCompilerType(Object *);
 
 static const int Symtab_major_version = 8;
-static const int Symtab_minor_version = 1;
-static const int Symtab_maintenance_version = 2;
+static const int Symtab_minor_version = 2;
+static const int Symtab_maintenance_version = 0;
 
 
 void Symtab::version(int& major, int& minor, int& maintenance)
@@ -178,7 +177,7 @@ boost::shared_ptr<builtInTypeCollection> Symtab::setupBuiltinTypes()
    // in stab document, size specified in bits, system size is in bytes
    builtInTypes->addBuiltInType(newType = new typeScalar(-1, 4, "int", true));
    newType->decrRefCount();
-   // -2  char, 8 bit type holding a character. GDB & dbx(AIX) treat as signed
+   // -2  char, 8 bit type holding a character. GDB treats as signed
    builtInTypes->addBuiltInType(newType = new typeScalar(-2, 1, "char", true));
    newType->decrRefCount();
    // -3  short, 16 bit signed integral type
@@ -356,14 +355,32 @@ SYMTAB_EXPORT bool Symtab::isNativeCompiler() const
 
 SYMTAB_EXPORT Symtab::Symtab(MappedFile *mf_) :
    AnnotatableSparse(),
-   mf(mf_), 
-   imageOffset_(0),   
+   member_offset_(0),
+   parentArchive_(NULL),
+   mf(mf_), mfForDebugInfo(NULL),
+   imageOffset_(0), imageLen_(0),
+   dataOffset_(0), dataLen_(0),
+   is_a_out(false),
+   main_call_addr_(0),
+   nativeCompiler(false),
    address_width_(sizeof(int)),
-   object_type_(obj_Unknown),
-   defaultNamespacePrefix(""),
+   code_ptr_(NULL), data_ptr_(NULL),
+   entry_address_(0), base_address_(0), load_address_(0),
+   object_type_(obj_Unknown), is_eel_(false),
    no_of_sections(0),
    newSectionInsertPoint(0),
    no_of_symbols(0),
+   sorted_everyFunction(false),
+   isLineInfoValid_(false),
+   isTypeInfoValid_(false),
+   nlines_(0), fdptr_(0), lines_(NULL),
+   stabstr_(NULL), nstabs_(0), stabs_(NULL),
+   stringpool_(NULL),
+   hasRel_(false), hasRela_(false), hasReldyn_(false),
+   hasReladyn_(false), hasRelplt_(false), hasRelaplt_(false),
+   isStaticBinary_(false), isDefensiveBinary_(false),
+   func_lookup(NULL),
+   lineInfo(NULL),
    obj_private(NULL),
    _ref_cnt(1)
 {
@@ -373,37 +390,42 @@ SYMTAB_EXPORT Symtab::Symtab(MappedFile *mf_) :
     // This is how we initialize objects from WTX information alone.
     // Basically replaces extractInfo().
     object_type_ = obj_RelocatableFile;
-    imageOffset_ = 0;
-    dataOffset_ = 0;
-    imageLen_ = 0;
-    dataLen_ = 0;
-    isStaticBinary_ = false;
-    hasRel_ = false;
-    hasRela_ = false;
-    hasReldyn_ = false;
-    hasReladyn_ = false;
-    hasRelplt_ = false;
-    hasRelaplt_ = false;
-    is_a_out = false;
-    code_ptr_ = NULL;
-    data_ptr_ = NULL;
-    entry_address_ = 0;
-    base_address_ = 0;
-    load_address_ = 0;
-    is_eel_ = false;
+    // (... the rest are now initialized for everyone above ...)
 #endif
 
     createDefaultModule();
 }
 
 SYMTAB_EXPORT Symtab::Symtab() :
-   imageOffset_(0),
+   LookupInterface(),
+   Serializable(),
+   AnnotatableSparse(),
+   member_offset_(0),
+   parentArchive_(NULL),
+   mf(NULL), mfForDebugInfo(NULL),
+   imageOffset_(0), imageLen_(0),
+   dataOffset_(0), dataLen_(0),
+   is_a_out(false),
+   main_call_addr_(0),
+   nativeCompiler(false),
    address_width_(sizeof(int)),
-   object_type_(obj_Unknown),
-   defaultNamespacePrefix(""),
+   code_ptr_(NULL), data_ptr_(NULL),
+   entry_address_(0), base_address_(0), load_address_(0),
+   object_type_(obj_Unknown), is_eel_(false),
    no_of_sections(0),
    newSectionInsertPoint(0),
    no_of_symbols(0),
+   sorted_everyFunction(false),
+   isLineInfoValid_(false),
+   isTypeInfoValid_(false),
+   nlines_(0), fdptr_(0), lines_(NULL),
+   stabstr_(NULL), nstabs_(0), stabs_(NULL),
+   stringpool_(NULL),
+   hasRel_(false), hasRela_(false), hasReldyn_(false),
+   hasReladyn_(false), hasRelplt_(false), hasRelaplt_(false),
+   isStaticBinary_(false), isDefensiveBinary_(false),
+   func_lookup(NULL),
+   lineInfo(NULL),
    obj_private(NULL),
    _ref_cnt(1)
 {
@@ -879,7 +901,9 @@ bool Symtab::addSymbolToAggregates(Symbol *&sym)
 {
 
     switch(sym->getType()) {
-    case Symbol::ST_FUNCTION: {
+    case Symbol::ST_FUNCTION: 
+    case Symbol::ST_INDIRECT:
+      {
         // We want to do the following:
         // If no function exists, create and add. 
         // Combine this information
@@ -1202,13 +1226,35 @@ Module *Symtab::newModule(const std::string &name, const Offset addr, supportedL
 }
 
 Symtab::Symtab(std::string filename, bool defensive_bin, bool &err) :
+   LookupInterface(),
+   Serializable(),
+   AnnotatableSparse(),
    member_offset_(0),
-   is_a_out(false), 
+   parentArchive_(NULL),
+   mf(NULL), mfForDebugInfo(NULL),
+   imageOffset_(0), imageLen_(0),
+   dataOffset_(0), dataLen_(0),
+   is_a_out(false),
    main_call_addr_(0),
-   nativeCompiler(false), 
-   isLineInfoValid_(false), 
+   nativeCompiler(false),
+   address_width_(sizeof(int)),
+   code_ptr_(NULL), data_ptr_(NULL),
+   entry_address_(0), base_address_(0), load_address_(0),
+   object_type_(obj_Unknown), is_eel_(false),
+   no_of_sections(0),
+   newSectionInsertPoint(0),
+   no_of_symbols(0),
+   sorted_everyFunction(false),
+   isLineInfoValid_(false),
    isTypeInfoValid_(false),
-   isDefensiveBinary_(defensive_bin),
+   nlines_(0), fdptr_(0), lines_(NULL),
+   stabstr_(NULL), nstabs_(0), stabs_(NULL),
+   stringpool_(NULL),
+   hasRel_(false), hasRela_(false), hasReldyn_(false),
+   hasReladyn_(false), hasRelplt_(false), hasRelaplt_(false),
+   isStaticBinary_(false), isDefensiveBinary_(defensive_bin),
+   func_lookup(NULL),
+   lineInfo(NULL),
    obj_private(NULL),
    _ref_cnt(1)
 {
@@ -1254,13 +1300,36 @@ Symtab::Symtab(std::string filename, bool defensive_bin, bool &err) :
 
 Symtab::Symtab(unsigned char *mem_image, size_t image_size, 
                const std::string &name, bool defensive_bin, bool &err) :
+   LookupInterface(),
+   Serializable(),
+   AnnotatableSparse(),
    member_offset_(0),
-   is_a_out(false), 
+   parentArchive_(NULL),
+   mf(NULL), mfForDebugInfo(NULL),
+   imageOffset_(0), imageLen_(0),
+   dataOffset_(0), dataLen_(0),
+   is_a_out(false),
    main_call_addr_(0),
    nativeCompiler(false),
+   address_width_(sizeof(int)),
+   code_ptr_(NULL), data_ptr_(NULL),
+   entry_address_(0), base_address_(0), load_address_(0),
+   object_type_(obj_Unknown), is_eel_(false),
+   no_of_sections(0),
+   newSectionInsertPoint(0),
+   no_of_symbols(0),
+   sorted_everyFunction(false),
    isLineInfoValid_(false),
    isTypeInfoValid_(false),
+   nlines_(0), fdptr_(0), lines_(NULL),
+   stabstr_(NULL), nstabs_(0), stabs_(NULL),
+   stringpool_(NULL),
+   hasRel_(false), hasRela_(false), hasReldyn_(false),
+   hasReladyn_(false), hasRelplt_(false), hasRelaplt_(false),
+   isStaticBinary_(false),
    isDefensiveBinary_(defensive_bin),
+   func_lookup(NULL),
+   lineInfo(NULL),
    obj_private(NULL),
    _ref_cnt(1)
 {
@@ -1299,69 +1368,6 @@ Symtab::Symtab(unsigned char *mem_image, size_t image_size,
    defaultNamespacePrefix = "";
 }
 
-// Symtab constructor for archive members
-#if defined(os_aix)
-Symtab::Symtab(std::string filename, std::string member_name, Offset offset, 
-               bool &err, void *base) :
-   member_name_(member_name), 
-   member_offset_(offset),
-   is_a_out(false),
-   main_call_addr_(0), 
-   nativeCompiler(false), 
-   isLineInfoValid_(false),
-   isTypeInfoValid_(false), 
-   obj_private(NULL),
-   _ref_cnt(1)
-{
-   mf = MappedFile::createMappedFile(filename);
-   assert(mf);
-   obj_private = new Object(mf, member_name, offset, symtab_log_perror, base);
-   if (obj_private->hasError()) {
-     err = true;
-     return;
-   }
-   err = !extractInfo(obj_private);
-   defaultNamespacePrefix = "";
-
-   create_printf("%s[%d]: created symtab for %s(%s)\n", FILE__, __LINE__, filename.c_str(),
-           member_name.c_str());
-}
-#else
-Symtab::Symtab(std::string, std::string, Offset, bool &, void *)
-{
-    assert(0);
-}
-#endif
-
-#if defined(os_aix) // is this ever used on AIX? 
-Symtab::Symtab(char *mem_image, size_t image_size, std::string member_name,
-                       Offset offset, bool &err, void *base) :
-   member_name_(member_name), 
-   member_offset_(offset),
-   is_a_out(false), 
-   main_call_addr_(0),
-   nativeCompiler(false), 
-   isLineInfoValid_(false), 
-   isTypeInfoValid_(false),
-   _ref_cnt(1)
-{
-   mf = MappedFile::createMappedFile(mem_image, image_size);
-   assert(mf);
-   obj_private = new Object(mf, mf, member_name, offset, symtab_log_perror, base);
-   if (obj_private->hasError()) {
-     err = true;
-     return;
-   }
-   err = !extractInfo(obj_private);
-   defaultNamespacePrefix = "";
-}
-#else 
-Symtab::Symtab(char *, size_t, std::string , Offset, bool &, void *)
-{
-    assert(0);
-}
-#endif
-
 bool sort_reg_by_addr(const Region* a, const Region* b)
 {
   if (a->getMemOffset() == b->getMemOffset())
@@ -1394,8 +1400,6 @@ bool Symtab::extractInfo(Object *linkedFile)
     
     if (0 == imageLen_ || 0 == linkedFile->code_ptr()) 
     {
-        // for AIX, code_ptr()==NULL is normal behavior
-#if !defined(os_aix)
        if (0 == linkedFile->code_ptr()) {
           //fprintf(stderr, "[%s][%d]WARNING: null code pointer in Symtab for"
           //" file %s, possibly due to a missing .text section.\n",
@@ -1403,7 +1407,6 @@ bool Symtab::extractInfo(Object *linkedFile)
           linkedFile->code_ptr_ = (char *) linkedFile->code_off();
        }
        else 
-#endif
        {
            if( object_type_ != obj_RelocatableFile ||
                linkedFile->code_ptr() == 0)
@@ -1494,17 +1497,11 @@ bool Symtab::extractInfo(Object *linkedFile)
     is_eel_ = linkedFile->isEEL();
     linkedFile->getSegments(segments_);
 
-#if !defined(os_aix) && !defined(os_windows)
+#if !defined(os_windows)
     linkedFile->getDependencies(deps_);
 #endif
 
-#if defined (os_aix)
-    //  These should go away
-    linkedFile->get_stab_info(stabstr_, nstabs_, stabs_, stringpool_);
-    linkedFile->get_line_info(nlines_, lines_, fdptr_);
-#endif
-
-#if defined(os_aix) || defined(os_linux) || defined(os_freebsd)
+#if defined(os_linux) || defined(os_freebsd)
     // make sure we're using the right demangler
     
     nativeCompiler = parseCompilerType(linkedFile);
@@ -1613,29 +1610,39 @@ Symtab::Symtab(const Symtab& obj) :
    LookupInterface(),
    Serializable(),
    AnnotatableSparse(),
+   member_name_(obj.member_name_),
+   member_offset_(obj.member_offset_),
+   parentArchive_(NULL),
+   mf(NULL), mfForDebugInfo(NULL),
+   imageOffset_(obj.imageOffset_), imageLen_(obj.imageLen_),
+   dataOffset_(obj.dataOffset_), dataLen_(obj.dataLen_),
+   is_a_out(obj.is_a_out),
+   main_call_addr_(obj.main_call_addr_),
+   nativeCompiler(obj.nativeCompiler),
+   address_width_(sizeof(int)),
+   code_ptr_(NULL), data_ptr_(NULL),
+   entry_address_(0), base_address_(0), load_address_(0),
+   object_type_(obj_Unknown), is_eel_(false),
+   defaultNamespacePrefix(obj.defaultNamespacePrefix),
+   no_of_sections(0),
+   newSectionInsertPoint(0),
+   no_of_symbols(obj.no_of_symbols),
+   sorted_everyFunction(false),
+   isLineInfoValid_(obj.isLineInfoValid_),
+   isTypeInfoValid_(obj.isTypeInfoValid_),
+   nlines_(0), fdptr_(0), lines_(NULL),
+   stabstr_(NULL), nstabs_(0), stabs_(NULL),
+   stringpool_(NULL),
+   hasRel_(false), hasRela_(false), hasReldyn_(false),
+   hasReladyn_(false), hasRelplt_(false), hasRelaplt_(false),
+   isStaticBinary_(false), isDefensiveBinary_(obj.isDefensiveBinary_),
+   func_lookup(NULL),
+   lineInfo(NULL),
+   obj_private(NULL),
    _ref_cnt(1)
 {
     create_printf("%s[%d]: Creating symtab 0x%p from symtab 0x%p\n", FILE__, __LINE__, this, &obj);
-  
-    member_name_ = obj.member_name_;
-    member_offset_ = obj.member_offset_;
-    imageOffset_ = obj.imageOffset_;
-    imageLen_ = obj.imageLen_;
-    dataOffset_ = obj.dataOffset_;
-    dataLen_ = obj.dataLen_;
-    isDefensiveBinary_ = obj.isDefensiveBinary_;
 
-   isLineInfoValid_ = obj.isLineInfoValid_;
-   isTypeInfoValid_ = obj.isTypeInfoValid_;
-
-   is_a_out = obj.is_a_out;
-   main_call_addr_ = obj.main_call_addr_; // address of call to main()
-
-   nativeCompiler = obj.nativeCompiler;
-   defaultNamespacePrefix = obj.defaultNamespacePrefix;
-
-   //sections
-   no_of_sections = obj.no_of_sections;
    unsigned i;
 
    for (i=0;i<obj.regions_.size();i++) {
@@ -1647,6 +1654,7 @@ Symtab::Symtab(const Symtab& obj) :
       regionsByEntryAddr[regions_[i]->getMemOffset()] = regions_[i];
 
    // TODO FIXME: copying symbols/Functions/Variables
+   // (and perhaps anything else initialized zero above)
 
    for (i=0;i<obj._mods.size();i++)
    {
@@ -1805,7 +1813,6 @@ Symtab::~Symtab()
    // Only called if we fail to create a process.
    // Or delete the a.out...
 
-#if 1 
 
    for (unsigned i = 0; i < regions_.size(); i++) 
    {
@@ -1878,13 +1885,19 @@ Symtab::~Symtab()
          allSymtabs.erase(allSymtabs.begin()+i);
    }
 
+   if (func_lookup)
+      delete func_lookup;
+
    // Make sure to free the underlying Object as it doesn't have a factory
    // open method
    if( obj_private ) delete obj_private;
 
    //fprintf(stderr, "%s[%d]:  symtab DTOR, mf = %p: %s\n", FILE__, __LINE__, mf, mf->filename().c_str());
    if (mf) MappedFile::closeMappedFile(mf);
-#endif
+
+   // Delete line information
+   delete lineInfo;
+
 }	
 
 #if !defined(SERIALIZATION_DISABLED)
@@ -2286,8 +2299,7 @@ bool Symtab::addRegion(Region *sec)
 
 void Symtab::parseLineInformation()
 {
-   dyn_hash_map<std::string, LineInformation> *lineInfo = new dyn_hash_map <std::string, LineInformation>;
-
+   lineInfo = new dyn_hash_map <std::string, LineInformation>;
 
    Object *linkedFile = getObject();
 	if (!linkedFile)
@@ -2457,7 +2469,6 @@ void Symtab::parseTypes()
 		return;
 	}
    linkedFile->parseTypeInfo(this);
-   isTypeInfoValid_ = true;
 
    for (unsigned int i = 0; i < _mods.size(); ++i)
    {
@@ -2990,7 +3001,7 @@ SYMTAB_EXPORT std::string Symtab::file() const
 
 SYMTAB_EXPORT std::string Symtab::name() const 
 {
-   return mf->filename();
+  return obj_private->getFileName();
 }
 
 SYMTAB_EXPORT std::string Symtab::memberName() const 
@@ -3198,19 +3209,26 @@ SYMTAB_EXPORT LookupInterface::~LookupInterface()
 SYMTAB_EXPORT ExceptionBlock::ExceptionBlock(Offset tStart, 
       unsigned tSize, 
       Offset cStart) 
-: tryStart_(tStart), trySize_(tSize), catchStart_(cStart), hasTry_(true) 
+: tryStart_(tStart), trySize_(tSize), catchStart_(cStart), hasTry_(true),
+  tryStart_ptr(0), tryEnd_ptr(0), catchStart_ptr(0), fdeStart_ptr(0), fdeEnd_ptr(0)
 {
 }
 
    SYMTAB_EXPORT ExceptionBlock::ExceptionBlock(Offset cStart) 
-: tryStart_(0), trySize_(0), catchStart_(cStart), hasTry_(false) 
+: tryStart_(0), trySize_(0), catchStart_(cStart), hasTry_(false),
+  tryStart_ptr(0), tryEnd_ptr(0), catchStart_ptr(0), fdeStart_ptr(0), fdeEnd_ptr(0)
 {
 }
 
 SYMTAB_EXPORT ExceptionBlock::ExceptionBlock(const ExceptionBlock &eb) :
    Serializable(),
    tryStart_(eb.tryStart_), trySize_(eb.trySize_), 
-   catchStart_(eb.catchStart_), hasTry_(eb.hasTry_) 
+   catchStart_(eb.catchStart_), hasTry_(eb.hasTry_),
+   tryStart_ptr(eb.tryStart_ptr),
+   tryEnd_ptr(eb.tryEnd_ptr),
+   catchStart_ptr(eb.catchStart_ptr),
+   fdeStart_ptr(eb.fdeStart_ptr),
+   fdeEnd_ptr(eb.fdeEnd_ptr)
 {
 }
 SYMTAB_EXPORT bool ExceptionBlock::hasTry() const
@@ -3263,7 +3281,8 @@ SYMTAB_EXPORT relocationEntry::relocationEntry() :
    rtype_(Region::RT_REL), 
    name_(""), 
    dynref_(NULL), 
-   relType_(0)
+   relType_(0),
+   rel_struct_addr_(0)
 {
 }   
 
@@ -3275,7 +3294,8 @@ SYMTAB_EXPORT relocationEntry::relocationEntry(Offset ta, Offset ra, std::string
    rtype_(Region::RT_REL), 
    name_(n), 
    dynref_(dynref), 
-   relType_(relType)
+   relType_(relType),
+   rel_struct_addr_(0)
 {
 }
 
@@ -3287,7 +3307,8 @@ SYMTAB_EXPORT relocationEntry::relocationEntry(Offset ta, Offset ra, Offset add,
    rtype_(Region::RT_REL), 
    name_(n), 
    dynref_(dynref), 
-   relType_(relType)
+   relType_(relType),
+   rel_struct_addr_(0)
 {
 }
 
@@ -3313,7 +3334,8 @@ SYMTAB_EXPORT relocationEntry::relocationEntry(Offset ta, Offset ra, Offset add,
     rtype_(rtype),
     name_(n),
     dynref_(dynref),
-    relType_(relType)
+    relType_(relType),
+    rel_struct_addr_(0)
 {
 }
 
@@ -3607,6 +3629,7 @@ void Symtab::parseTypesNow()
 {
    if (isTypeInfoValid_)
       return;
+   isTypeInfoValid_ = true;
 
    parseTypes();
 }
@@ -3680,7 +3703,7 @@ SYMTAB_EXPORT Offset Symtab::getElfDynamicOffset()
 
 SYMTAB_EXPORT bool Symtab::removeLibraryDependency(std::string lib)
 {
-#if defined(os_aix) || defined(os_windows)
+#if defined(os_windows)
    return false;
 #else
    Object *obj = getObject();
@@ -3694,10 +3717,6 @@ SYMTAB_EXPORT bool Symtab::removeLibraryDependency(std::string lib)
    
 SYMTAB_EXPORT bool Symtab::addLibraryPrereq(std::string name)
 {
-#if defined(os_aix)
-   return false;
-#endif
-
    Object *obj = getObject();
 	if (!obj)
 	{
@@ -3807,7 +3826,7 @@ SYMTAB_EXPORT bool Symtab::addTrapHeader_win(Address ptr)
    getObject()->setTrapHeader(ptr);
    return true;
 #else
-   ptr = ptr; //keep compiler happy
+   (void) ptr; //keep compiler happy
    assert(0);
    return false;
 #endif
@@ -3831,7 +3850,7 @@ SYMTAB_EXPORT bool Symtab::getLinkingResources(std::vector<Archive *> &libs) {
 
 SYMTAB_EXPORT Address Symtab::getLoadAddress()
 {
-#if defined(os_linux) || defined(os_freebsd) || defined(os_aix)
+#if defined(os_linux) || defined(os_freebsd)
    return getObject()->getLoadAddress();
 #else
    return 0x0;
@@ -3874,4 +3893,8 @@ void Symtab::getSegmentsSymReader(std::vector<SymSegment> &segs) {
 #endif
 }
 
-
+void Symtab::rebase(Offset loadOff)
+{
+	getObject()->rebase(loadOff);
+	load_address_ = loadOff;
+}

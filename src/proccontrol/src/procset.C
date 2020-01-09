@@ -38,7 +38,9 @@
 #include "proccontrol/src/int_handler.h"
 #include "proccontrol/src/irpc.h"
 #include "proccontrol/src/response.h"
-#include "common/h/Types.h"
+#include "proccontrol/src/processplat.h"
+#include "proccontrol/src/int_event.h"
+#include "common/src/Types.h"
 #include <stdlib.h>
 #include <map>
 #include <algorithm>
@@ -66,6 +68,8 @@ private:
    ThreadTrackingSet *thrdset;
    LWPTrackingSet *lwpset;
    FollowForkSet *forkset;
+   RemoteIOSet *ioset;
+   MemoryUsageSet *memset;
 };
 
 class TSetFeatures {
@@ -83,7 +87,9 @@ PSetFeatures::PSetFeatures() :
    libset(NULL),
    thrdset(NULL),
    lwpset(NULL),
-   forkset(NULL)
+   forkset(NULL),
+   ioset(NULL),
+   memset(NULL)
 {
 }
 
@@ -100,6 +106,14 @@ PSetFeatures::~PSetFeatures()
    if (forkset) {
       delete forkset;
       forkset = NULL;
+   }
+   if (ioset) {
+      delete ioset;
+      ioset = NULL;
+   }
+   if (memset) {
+      delete memset;
+      memset = NULL;
    }
 }
 
@@ -609,6 +623,7 @@ public:
       msg(m),
       had_error(e),
       flags(f),
+      container(),
       finished_clear(false),
       did_begin(false)
    {
@@ -840,12 +855,17 @@ ProcessSet::ptr ProcessSet::attachProcessSet(vector<AttachInfo> &ainfo)
       AttachInfo &ai = *(j->second);
       
       err_t last_error = proc->getLastError();
+      if (last_error == err_none && proc->getState() == int_process::errorstate) {
+         last_error = err_noproc;
+      }
       if (last_error == err_none) {
          ai.proc = proc->proc();
          ai.error_ret = err_none;
          i++;
          continue;
       }
+      pthrd_printf("Erasing process %d from attach return set because err = %d\n",
+                   proc->getPid(), last_error);
       ai.error_ret = last_error;
       ai.proc = Process::ptr();
       newps->erase(i++);
@@ -978,11 +998,11 @@ LibraryTrackingSet *ProcessSet::getLibraryTracking()
       return features->libset;
 
    MTLock lock_this_func;
+   if (!procset)
+      return NULL;
    if (!features) {
       features = new PSetFeatures();
    }
-   if (!procset)
-      return NULL;
    for (int_processSet::iterator i = procset->begin(); i != procset->end(); i++) {
       Process::ptr p = *i;
       if (p->getLibraryTracking()) {
@@ -1000,11 +1020,11 @@ ThreadTrackingSet *ProcessSet::getThreadTracking()
       return features->thrdset;
 
    MTLock lock_this_func;
+   if (!procset)
+      return NULL;
    if (!features) {
       features = new PSetFeatures();
    }
-   if (!procset)
-      return NULL;
    for (int_processSet::iterator i = procset->begin(); i != procset->end(); i++) {
       Process::ptr p = *i;
       if (p->getThreadTracking()) {
@@ -1022,11 +1042,11 @@ LWPTrackingSet *ProcessSet::getLWPTracking()
       return features->lwpset;
 
    MTLock lock_this_func;
+   if (!procset)
+      return NULL;
    if (!features) {
       features = new PSetFeatures();
    }
-   if (!procset)
-      return NULL;
    for (int_processSet::iterator i = procset->begin(); i != procset->end(); i++) {
       Process::ptr p = *i;
       if (p->getLWPTracking()) {
@@ -1044,16 +1064,60 @@ FollowForkSet *ProcessSet::getFollowFork()
       return features->forkset;
 
    MTLock lock_this_func;
+   if (!procset)
+      return NULL;
    if (!features) {
       features = new PSetFeatures();
    }
-   if (!procset)
-      return NULL;
    for (int_processSet::iterator i = procset->begin(); i != procset->end(); i++) {
       Process::ptr p = *i;
       if (p->getFollowFork()) {
          features->forkset = new FollowForkSet(shared_from_this());
          return features->forkset;
+      }
+   }
+
+   return NULL;
+}
+
+RemoteIOSet *ProcessSet::getRemoteIO()
+{
+   if (features && features->ioset)
+      return features->ioset;
+
+   MTLock lock_this_func;
+   if (!procset)
+      return NULL;
+   if (!features) {
+      features = new PSetFeatures();
+   }
+   for (int_processSet::iterator i = procset->begin(); i != procset->end(); i++) {
+      Process::ptr p = *i;
+      if (p->getRemoteIO()) {
+         features->ioset = new RemoteIOSet(shared_from_this());
+         return features->ioset;
+      }
+   }
+
+   return NULL;
+}
+
+MemoryUsageSet *ProcessSet::getMemoryUsage()
+{
+   if (features && features->memset)
+      return features->memset;
+
+   MTLock lock_this_func;
+   if (!procset)
+      return NULL;
+   if (!features) {
+      features = new PSetFeatures();
+   }
+   for (int_processSet::iterator i = procset->begin(); i != procset->end(); i++) {
+      Process::ptr p = *i;
+      if (p->getMemoryUsage()) {
+         features->memset = new MemoryUsageSet(shared_from_this());
+         return features->memset;
       }
    }
 
@@ -1080,7 +1144,15 @@ const FollowForkSet *ProcessSet::getFollowFork() const
    return const_cast<ProcessSet *>(this)->getFollowFork();
 }
 
+const RemoteIOSet *ProcessSet::getRemoteIO() const
+{
+   return const_cast<ProcessSet *>(this)->getRemoteIO();
+}
 
+const MemoryUsageSet *ProcessSet::getMemoryUsage() const
+{
+   return const_cast<ProcessSet *>(this)->getMemoryUsage();
+}
 ProcessSet::ptr ProcessSet::getErrorSubset() const
 {
    MTLock lock_this_func;
@@ -1209,12 +1281,16 @@ struct test_exited {
 bool ProcessSet::anyExited() const
 {
    MTLock lock_this_func;
+   if (procset->empty())
+      return true;
    return any_match(procset->begin(), procset->end(), test_exited());
 }
 
 bool ProcessSet::allExited() const
 {
    MTLock lock_this_func;
+   if (procset->empty())
+      return true;
    return all_match(procset->begin(), procset->end(), test_exited());
 }
 
@@ -3074,14 +3150,14 @@ bool LibraryTrackingSet::setTrackLibraries(bool b) const
    procset_iter iter("setTrackLibraries", had_error, ERR_CHCK_NORM);
    for (int_processSet::iterator i = iter.begin(procset); i != iter.end(); i = iter.inc()) {
       Process::ptr p = *i;
-      int_process *proc = p->llproc();
-
-      if (!p->getLibraryTracking()) {
+      int_libraryTracking *proc = p->llproc()->getLibraryTracking();
+      if (!proc) {
          perr_printf("Library tracking not supported on process %d\n", p->getPid());
          p->setLastError(err_unsupported, "No library tracking on this platform\n");
          had_error = true;
          continue;
       }
+      
       pthrd_printf("Changing sysv track libraries to %s for %d\n",
                    b ? "true" : "false", proc->getPid());
 
@@ -3089,7 +3165,7 @@ bool LibraryTrackingSet::setTrackLibraries(bool b) const
       int_breakpoint *bp;
       Address addr;
 
-      bool result = proc->sysv_setTrackLibraries(b, bp, addr, add_bp);
+      bool result = proc->setTrackLibraries(b, bp, addr, add_bp);
       if (!result) {
          had_error = true;
          continue;
@@ -3222,9 +3298,8 @@ bool ThreadTrackingSet::setTrackThreads(bool b) const
    procset_iter iter("setTrackThreads", had_error, ERR_CHCK_ALL);
    for (int_processSet::iterator i = iter.begin(procset); i != iter.end(); i = iter.inc()) {
       Process::ptr p = *i;
-      int_process *proc = p->llproc();
-
-      if (!p->getThreadTracking()) {
+      int_threadTracking *proc = p->llproc()->getThreadTracking();
+      if (!proc) {
          perr_printf("Thread tracking not supported on process %d\n", p->getPid());
          p->setLastError(err_unsupported, "No thread tracking on this platform\n");
          had_error = true;
@@ -3236,7 +3311,7 @@ bool ThreadTrackingSet::setTrackThreads(bool b) const
 
       bool add_bp;
       set<pair<int_breakpoint *, Address> > bps;
-      bool result = proc->threaddb_setTrackThreads(b, bps, add_bp);
+      bool result = proc->setTrackThreads(b, bps, add_bp);
       if (!result) {
          had_error = true;
          continue;
@@ -3287,8 +3362,14 @@ bool ThreadTrackingSet::refreshThreads() const
    int_processSet *procset = ps->getIntProcessSet();
    procset_iter iter("refreshThreads", had_error, ERR_CHCK_ALL);
    for (int_processSet::iterator i = iter.begin(procset); i != iter.end(); i = iter.inc()) {
-      int_process *proc = (*i)->llproc();
-      if (!proc->threaddb_refreshThreads()) {
+      int_threadTracking *proc = (*i)->llproc()->getThreadTracking();
+      if (!proc) {
+         perr_printf("Thread tracking not supported on process %d\n", proc->getPid());
+         proc->setLastError(err_unsupported, "No thread tracking on this platform\n");
+         had_error = true;
+         continue;
+      }
+      if (!proc->refreshThreads()) {
          had_error = true;
          continue;
       }
@@ -3340,7 +3421,13 @@ bool LWPTrackingSet::refreshLWPs() const
    set<int_process *> all_procs;
    set<int_process *> change_procs;
    for (int_processSet::iterator i = iter.begin(procset); i != iter.end(); i = iter.inc()) {
-      int_process *proc = (*i)->llproc();
+      int_LWPTracking *proc = (*i)->llproc()->getLWPTracking();
+      if (!proc) {
+         perr_printf("LWP tracking not supported on process %d\n", proc->getPid());
+         proc->setLastError(err_unsupported, "No LWP tracking on this platform\n");
+         had_error = true;
+         continue;
+      }
       result_response::ptr resp;
       if (!proc->lwp_refreshPost(resp)) {
          pthrd_printf("Error refreshing lwps on %d\n", proc->getPid());
@@ -3355,7 +3442,9 @@ bool LWPTrackingSet::refreshLWPs() const
    int_process::waitForAsyncEvent(all_resps);
 
    for (set<int_process *>::iterator i = all_procs.begin(); i != all_procs.end(); i++) {
-      int_process *proc = *i;
+      int_LWPTracking *proc = (*i)->getLWPTracking();
+      if (!proc)
+         continue;
       bool changed;
       bool result = proc->lwp_refreshCheck(changed);
       if (!result) {
@@ -3409,23 +3498,14 @@ bool FollowForkSet::setFollowFork(FollowFork::follow_t f) const
    int_processSet *procset = ps->getIntProcessSet();
    procset_iter iter("setFollowFork", had_error, ERR_CHCK_ALL);
    for (int_processSet::iterator i = iter.begin(procset); i != iter.end(); i = iter.inc()) {
-      Process::ptr proc = *i;
-      if (!proc->getFollowFork()) {
-         perr_printf("Fork control not supported on process %d\n", proc->getPid());
-         proc->setLastError(err_unsupported, "No fork control on this platform\n");
+      int_followFork *proc = (*i)->llproc()->getFollowFork();
+      if (!proc) {
+         perr_printf("Follow Fork not supported on process %d\n", proc->getPid());
+         proc->setLastError(err_unsupported, "No follow fork control on this platform\n");
          had_error = true;
          continue;
       }
-
-      int_process *llproc = proc->llproc();
-      if (!llproc) {
-         perr_printf("setFollowFork attempted on deleted process %d\n", proc->getPid());
-         proc->setLastError(err_exited, "Process was exited");
-         had_error = true;
-         continue;
-      }
-
-      llproc->fork_setTracking(f);
+      proc->fork_setTracking(f);
    }
 
    return !had_error;
@@ -3462,14 +3542,14 @@ bool CallStackUnwindingSet::walkStack(CallStackCallback *stk_cb)
    getResponses().lock();
    for (thrset_iter::i_t i = iter.begin(ithrset); i != iter.end(); i = iter.inc()) {
       Thread::ptr t = *i;
-      if (!t->getCallStackUnwinding()) {
+      int_thread *thr = t->llthrd();
+      int_callStackUnwinding *proc = thr->llproc()->getCallStackUnwinding();
+      if (!proc) {
          perr_printf("Stack unwinding not supported on process %d\n", t->getProcess()->getPid());
          t->setLastError(err_unsupported, "No stack unwinding on this platform\n");
          had_error = true;
          continue;
       }
-      int_thread *thr = t->llthrd();
-      int_process *proc = thr->llproc();
       stack_response::ptr stk_resp = stack_response::createStackResponse(thr);
       stk_resp->markSyncHandled();
 
@@ -3502,7 +3582,7 @@ bool CallStackUnwindingSet::walkStack(CallStackCallback *stk_cb)
          stack_response::ptr stk_resp = (*i)->getStackResponse();
          if (stk_resp->hasError() || stk_resp->isReady()) {
             int_thread *thr = stk_resp->getThread();
-            int_process *proc = thr->llproc();
+            int_callStackUnwinding *proc = thr->llproc()->getCallStackUnwinding();
             pthrd_printf("Handling completed stackwalk for %d/%d\n", proc->getPid(), thr->getLWP());
             bool result = proc->plat_handleStackInfo(stk_resp, stk_cb);
             if (!result) {
@@ -3524,3 +3604,362 @@ bool CallStackUnwindingSet::walkStack(CallStackCallback *stk_cb)
    return !had_error;
 }
 
+bool RemoteIOSet::getFileNames(FileSet *fset)
+{
+   MTLock lock_this_func;
+   bool had_error = false;
+
+   if (!fset) {
+      perr_printf("NULL FileSet passed to getFileNames\n");
+      globalSetLastError(err_badparam, "Unexpected NULL parameter");
+      return false;
+   }
+   ProcessSet::ptr procs = pset.lock();
+   if (!procs || procs->empty()) {
+      perr_printf("getFileNames attempted on empty proces set\n");
+      globalSetLastError(err_badparam, "getFileNames on empty process set");
+      return false;
+   }
+
+   pthrd_printf("RemoteIOSet::getFileNames called on %lu processes\n", (unsigned long)procs->size());
+
+   set<FileSetResp_t *> all_resps;
+   int_processSet *procset = procs->getIntProcessSet();
+   procset_iter iter("getFileNames", had_error, ERR_CHCK_NORM);   
+   for (int_processSet::iterator i = iter.begin(procset); i != iter.end(); i = iter.inc()) {
+      int_remoteIO *proc = (*i)->llproc()->getRemoteIO();
+      if (!proc) {
+         perr_printf("getFileNames attempted on non RemoteIO process %d\n", proc->getPid());
+         proc->setLastError(err_unsupported, "getFileNames not supported on this platform");
+         had_error = true;
+         continue;
+      }
+
+      FileSetResp_t *new_resp = new FileSetResp_t(fset, proc);
+      bool result = proc->plat_getFileNames(new_resp);
+      if (!result) {
+         pthrd_printf("Error running plat_getFileNames on %d\n", proc->getPid());
+         proc->setLastError(err_internal, "Internal error getting filenames");
+         had_error = true;
+         delete new_resp;
+         continue;
+      }
+
+      all_resps.insert(new_resp);
+   }
+
+   for (set<FileSetResp_t *>::iterator i = all_resps.begin(); i != all_resps.end(); i++) {
+      FileSetResp_t *resp = *i;
+      resp->getProc()->waitForEvent(resp);
+      delete resp;
+   }
+
+   return !had_error;
+}
+
+bool RemoteIOSet::getFileStatData(FileSet *fset)
+{
+   MTLock lock_this_func;
+   bool had_error = false;
+
+   if (!fset) {
+      perr_printf("NULL FileSet passed to getFileStatData\n");
+      globalSetLastError(err_badparam, "Unexpected NULL parameter");
+      return false;
+   }
+   ProcessSet::ptr procs = pset.lock();
+   if (!procs || procs->empty()) {
+      perr_printf("getFileStatData attempted on empty proces set\n");
+      globalSetLastError(err_badparam, "getFileStatData on empty process set");
+      return false;
+   }
+
+
+   pthrd_printf("RemoteIOSet::getFileStatData called on %lu processes\n", (unsigned long)procs->size());
+
+   set<StatResp_t *> all_resps;
+
+   for (FileSet::iterator i = fset->begin(); i != fset->end(); i++) {
+      pthrd_printf("About to access proc %p\n", i->first->llproc());
+      fflush(stderr);
+      int_remoteIO *proc = i->first->llproc()->getRemoteIO();
+      if (!proc) {
+         perr_printf("getFileStatData attempted on non RemoteIO process %d\n", proc->getPid());
+         proc->setLastError(err_unsupported, "getFileStatData not supported on this platform");
+         had_error = true;
+         continue;
+      }
+      FileInfo &fi = i->second;
+      int_fileInfo_ptr info = fi.getInfo();
+      if (info->filename.empty()) {
+         perr_printf("Empty filename in stat operation on %d\n", proc->getPid());
+         proc->setLastError(err_badparam, "Empty filename specified in stat operation");
+         had_error = true;
+         continue;
+      }
+      
+      bool result = proc->plat_getFileStatData(info->filename, &info->stat_results, all_resps);
+      if (!result) {
+         pthrd_printf("Error while requesting file stat data on %d\n", proc->getPid());
+         had_error = true;
+         continue;
+      }
+   }
+
+   for (set<StatResp_t *>::iterator i = all_resps.begin(); i != all_resps.end(); i++) {
+      StatResp_t *resp = *i;
+      resp->getProc()->waitForEvent(resp);
+      delete resp;
+   }
+
+   return !had_error;
+}
+
+bool RemoteIOSet::readFileContents(const FileSet *fset)
+{
+   MTLock lock_this_func;
+   bool had_error = false;
+
+   if (!fset) {
+      perr_printf("NULL FileSet passed to getFileStatData\n");
+      globalSetLastError(err_badparam, "Unexpected NULL parameter");
+      return false;
+   }
+
+   set<FileReadResp_t *> resps;
+
+   for (FileSet::const_iterator i = fset->begin(); i != fset->end(); i++) {
+      int_remoteIO *proc = i->first->llproc()->getRemoteIO();
+      if (!proc) {
+         perr_printf("getFileStatData attempted on non RemoteIO process %d\n", proc->getPid());
+         proc->setLastError(err_unsupported, "getFileStatData not supported on this platform");
+         had_error = true;
+         continue;
+      }
+
+      int_eventAsyncFileRead *fileread = new int_eventAsyncFileRead();
+      fileread->offset = 0;
+      fileread->whole_file = true;
+      fileread->filename = i->second.getFilename();
+      bool result = proc->plat_getFileDataAsync(fileread);
+      if (!result) {
+         pthrd_printf("Error while requesting file data on %d\n", proc->getPid());
+         had_error = true;
+         delete fileread;
+         continue;
+      }
+   }
+
+   return !had_error;
+}
+
+MemoryUsageSet::MemoryUsageSet(ProcessSet::ptr ps_) :
+   wps(ps_)
+{
+   pthrd_printf("Constructed MemoryUsageSet %p on procset of size %lu\n", this, (unsigned long) ps_->size());
+}
+
+MemoryUsageSet::~MemoryUsageSet()
+{
+   wps = ProcessSet::weak_ptr();
+}
+
+bool MemoryUsageSet::usedX(std::map<Process::const_ptr, unsigned long> &used, MemoryUsageSet::mem_usage_t mu) const
+{
+   MTLock lock_this_func;
+   bool had_error = false;
+
+   const char *mu_str = NULL;
+   switch (mu) {
+      case mus_shared:
+         mu_str = "sharedUsed";
+         break;
+      case mus_heap:
+         mu_str = "heapUsed";
+         break;
+      case mus_stack:
+         mu_str = "stackUsed";
+         break;
+      case mus_resident:
+         mu_str = "resident";
+         break;
+   }
+   ProcessSet::ptr ps = wps.lock();
+   if (!ps) {
+      perr_printf("%s on deleted process set\n", mu_str);
+      globalSetLastError(err_badparam, "memory usage query attempted on deleted ProcessSet object");
+      return false;
+   }
+   set<MemUsageResp_t *> resps;
+   const unsigned int max_operations = (mu == mus_resident ? ps->size() * 4 : ps->size());
+   unsigned long *result_sizes = new unsigned long[max_operations];
+   pthrd_printf("Performing set operation getting %s (may use %u ops)\n", mu_str, max_operations);
+
+   map<int_memUsage *, MemUsageResp_t *> shared_results, stack_results, heap_results, resident_results;
+
+   int_processSet *procset = ps->getIntProcessSet();
+   procset_iter iter(mu_str, had_error, ERR_CHCK_ALL);
+   unsigned int cur = 0;
+   for (int_processSet::iterator i = iter.begin(procset); i != iter.end(); i = iter.inc()) {
+      int_memUsage *proc = (*i)->llproc()->getMemUsage();
+      if (!proc) {
+         perr_printf("GetMemUsage not supported on process %d\n", proc->getPid());
+         proc->setLastError(err_unsupported, "No getMemUsage on this platform\n");
+         had_error = true;
+         continue;
+      }
+
+      int start, end;
+      if (mu == mus_resident && proc->plat_residentNeedsMemVals()) {
+         //To get resident we need shared, heap and stack first.  Do each one.
+         start = (int) mus_shared;
+         end = (int) mus_stack;
+      }
+      else {
+         //Just do the operation that was requested.
+         start = mu;
+         end = mu;
+      }
+      for (int i = start; i <= end; i++) {
+         assert(cur < max_operations);
+         MemUsageResp_t *resp = new MemUsageResp_t(result_sizes + cur++, proc);
+         bool result = false;
+         switch ((mem_usage_t) i) {
+            case mus_shared:
+               result = proc->plat_getSharedUsage(resp);
+               break;
+            case mus_heap:
+               result = proc->plat_getHeapUsage(resp);
+               break;
+            case mus_stack:
+               result = proc->plat_getStackUsage(resp);
+               break;
+            case mus_resident:
+               result = proc->plat_getResidentUsage(0, 0, 0, resp);
+               break;
+         }
+      
+         if (!result) {
+            had_error = true;
+            delete resp;
+            continue;
+         }
+
+         switch ((mem_usage_t) i) {
+            case mus_shared:
+               shared_results.insert(make_pair(proc, resp));
+               break;
+            case mus_heap:
+               heap_results.insert(make_pair(proc, resp));
+               break;
+            case mus_stack:
+               stack_results.insert(make_pair(proc, resp));
+               break;
+            case mus_resident:
+               resident_results.insert(make_pair(proc, resp));
+               break;
+         }
+
+         resps.insert(resp);
+      }
+   }
+
+   for (set<MemUsageResp_t *>::iterator i = resps.begin(); i != resps.end(); i++)
+      (*i)->getProc()->waitForEvent((*i));
+   resps.clear();
+
+   if (mu == mus_resident) { 
+      for (int_processSet::iterator i = iter.begin(procset); i != iter.end(); i = iter.inc()) {
+         int_memUsage *proc = (*i)->llproc()->getMemUsage();
+         if (!proc)
+            continue;
+         if (!proc->plat_residentNeedsMemVals())
+            continue;
+
+         map<int_memUsage *, MemUsageResp_t *>::iterator sh, st, he;
+         sh = shared_results.find(proc);
+         st = stack_results.find(proc);
+         he = heap_results.find(proc);
+         if (sh == shared_results.end() || st == stack_results.end() || he == heap_results.end() ||
+             sh->second->hadError() || st->second->hadError() || he->second->hadError()) {
+            perr_printf("Failed to read shared stack or heap on process %d for resident memory\n",
+                        proc->getPid());
+            continue;
+         }
+         pthrd_printf("Currently doing operation %u of %u\n", cur, max_operations);
+         assert(cur < max_operations);
+         MemUsageResp_t *resp = new MemUsageResp_t(result_sizes + cur++, proc);
+         bool result = proc->plat_getResidentUsage(*st->second->get(), *he->second->get(), *sh->second->get(), resp);
+         if (!result) {
+            perr_printf("Error calculating resident usage from stack, heap and shared on %d\n", proc->getPid());
+            delete resp;
+            continue;
+         }
+         resident_results.insert(make_pair(proc, resp));
+         resps.insert(resp);
+      }
+
+      for (set<MemUsageResp_t *>::iterator i = resps.begin(); i != resps.end(); i++)
+         (*i)->getProc()->waitForEvent(*i);
+   }
+
+   for (int_processSet::iterator i = iter.begin(procset); i != iter.end(); i = iter.inc()) {
+      int_memUsage *proc = (*i)->llproc()->getMemUsage();
+      if (!proc)
+         continue;   
+      map<int_memUsage *, MemUsageResp_t *> *the_results = NULL;
+      switch (mu) {
+         case mus_shared:
+            the_results = &shared_results;
+            break;
+         case mus_heap:
+            the_results = &heap_results;
+            break;
+         case mus_stack:
+            the_results = &stack_results;
+            break;
+         case mus_resident:
+            the_results = &resident_results;
+            break;
+      }
+      map<int_memUsage *, MemUsageResp_t *>::iterator j = the_results->find(proc);
+      if (j == the_results->end())
+         continue;
+      MemUsageResp_t *resp = j->second;
+      used.insert(make_pair(resp->getProc()->proc(), *resp->get()));         
+   }
+
+   map<int_memUsage *, MemUsageResp_t *>::iterator i;
+   for (i = shared_results.begin(); i != shared_results.end(); i++)
+      delete i->second;
+   for (i = stack_results.begin(); i != stack_results.end(); i++)
+      delete i->second;
+   for (i = heap_results.begin(); i != heap_results.end(); i++)
+      delete i->second;
+   for (i = resident_results.begin(); i != resident_results.end(); i++)
+      delete i->second;
+
+   delete [] result_sizes;
+
+   return !had_error;
+}
+
+bool MemoryUsageSet::sharedUsed(std::map<Process::const_ptr, unsigned long> &used) const
+{
+   return usedX(used, mus_shared);
+}
+
+bool MemoryUsageSet::heapUsed(std::map<Process::const_ptr, unsigned long> &used) const
+{
+   return usedX(used, mus_heap);
+}
+
+bool MemoryUsageSet::stackUsed(std::map<Process::const_ptr, unsigned long> &used) const
+{
+   return usedX(used, mus_stack);
+}
+
+bool MemoryUsageSet::resident(std::map<Process::const_ptr, unsigned long> &res) const
+{
+   return usedX(res, mus_resident);
+}

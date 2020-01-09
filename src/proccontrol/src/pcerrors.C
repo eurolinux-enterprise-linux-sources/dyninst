@@ -32,7 +32,7 @@
 
 #include "proccontrol/h/PCErrors.h"
 
-#include "common/h/dthread.h"
+#include "common/src/dthread.h"
 
 using namespace Dyninst;
 using namespace ProcControlAPI;
@@ -47,7 +47,7 @@ static signed long w_thrd_id;
 
 FILE *pctrl_err_out;
 bool dyninst_debug_proccontrol = false;
-static Mutex print_lock(true);
+static Mutex<true> print_lock;
 
 void pc_print_lock()
 {
@@ -200,7 +200,7 @@ public:
    {
       pctrl_err_out = stderr;
       char *debug = getenv("DYNINST_DEBUG_PROCCONTROL");
-      if (debug) {
+      if (debug && atoi(debug)) {
          setDebug(true);
       }
    }

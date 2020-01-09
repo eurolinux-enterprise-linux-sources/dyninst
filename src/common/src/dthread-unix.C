@@ -28,11 +28,12 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "common/h/dthread.h"
+#include "common/src/dthread.h"
 #include <pthread.h>
 #include <assert.h>
 
 DThread::DThread() :
+   thrd(0),
    live(false)
 {
 }
@@ -63,6 +64,7 @@ bool DThread::spawn(initial_func_t func, void *param)
    data->param = param;
    int result = pthread_create(&thrd, NULL, thread_init, data);
    assert(result == 0);
+   if(result) return false;
    live = true;
    return true;
 }
@@ -83,101 +85,5 @@ long DThread::id()
 long DThread::self()
 {
    return (long) pthread_self();
-}
-
-Mutex::Mutex(bool recursive)
-{
-   pthread_mutexattr_t attr;
-   pthread_mutexattr_init(&attr);
-   if (recursive) {
-      pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
-   }
-   int result = pthread_mutex_init(&mutex, &attr);
-   assert(result == 0);
-
-   pthread_mutexattr_destroy(&attr);
-}
-
-#include <stdio.h>
-#include <errno.h>
-#include <string.h>
-
-
-Mutex::~Mutex()
-{
-   int result = pthread_mutex_destroy(&mutex);
-   assert(result == 0);
-}
-
-bool Mutex::lock()
-{
-   int result = pthread_mutex_lock(&mutex);
-   return (result == 0);
-}
-
-bool Mutex::trylock()
-{
-  int result = pthread_mutex_trylock(&mutex);
-  return (result == 0);
-}
-
-bool Mutex::unlock()
-{
-   int result = pthread_mutex_unlock(&mutex);
-   return (result == 0);
-}
-
-CondVar::CondVar(Mutex *m)
-{
-   if (!m) {
-      created_mutex = true;
-      mutex = new Mutex();
-   }
-   else {
-      created_mutex = false;
-      mutex = static_cast<Mutex *>(m);
-   }
-   pthread_cond_init(&cond, NULL);
-}
-
-CondVar::~CondVar()
-{
-   if (created_mutex)
-      delete mutex;
-   int result = pthread_cond_destroy(&cond);
-   assert(result == 0);
-}
-
-bool CondVar::unlock()
-{
-   return mutex->unlock();
-}
-
-bool CondVar::lock()
-{
-   return mutex->lock();
-}
-
-bool CondVar::trylock()
-{
-  return mutex->trylock();
-}
-
-bool CondVar::signal()
-{
-   int result = pthread_cond_signal(&cond);
-   return result == 0;
-}
-
-bool CondVar::broadcast()
-{
-   int result = pthread_cond_broadcast(&cond);
-   return result == 0;
-}
-
-bool CondVar::wait()
-{
-   int result = pthread_cond_wait(&cond, &mutex->mutex);
-   return result == 0;
 }
 

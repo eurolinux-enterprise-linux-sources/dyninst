@@ -32,7 +32,7 @@
 #include "elf/h/Elf_X.h"
 #include "dwarf/h/dwarfHandle.h"
 #include "dwarf/h/dwarfFrameParser.h"
-#include "common/h/debug_common.h"
+#include "common/src/debug_common.h"
 #include <cstring>
 
 using namespace Dyninst;
@@ -137,6 +137,7 @@ bool DwarfHandle::init_dbg()
          break;
       default:
          assert(0 && "Unsupported archiecture in ELF file.");
+	 return false;
    }
    sw = Dwarf::DwarfFrameParser::create(*frame_data, arch);
 

@@ -35,7 +35,7 @@
 #include "boost/assign/std/set.hpp"
 #include <map>
 #include <string>
-#include "common/h/Types.h"
+#include "common/src/Types.h"
 #include "codegen.h"
 #include "util.h"
 #include "debug.h"
@@ -50,7 +50,7 @@
 #include "pcrel.h"
 
 #if defined(os_vxworks)
-#include "common/h/wtxKludges.h"
+#include "common/src/wtxKludges.h"
 #endif
 
 using namespace std;
@@ -191,10 +191,11 @@ bool convert_to_rel32(const unsigned char*&origInsn, unsigned char *&newInsn) {
 }
 
 
-// We keep an array-let that represents various fixed
-// insns
-unsigned char illegalRep[2] = {0x0f, 0x0b};
-unsigned char trapRep[1] = {0xCC};
+// We keep array-lets that represents various fixed insns.
+// They are larger than necessary so static analyzers don't think
+// they'll be read out of bounds.
+static const unsigned char illegalRep[8] = {0x0f, 0x0b};
+static const unsigned char trapRep[8] = {0xCC};
 
 
 void insnCodeGen::generateIllegal(codeGen &gen) {
@@ -1153,11 +1154,14 @@ bool insnCodeGen::modifyData(Address targetAddr, instruction &insn, codeGen &gen
    Address from = gen.currAddr();
 
    bool is_data_abs64 = false;
-   unsigned nPrefixes = count_prefixes(insnType);
    signed long newDisp = targetAddr - from;
    GET_PTR(newInsn, gen);
 
+   Register pointer_reg = (Register)-1;
+     
+#if defined(arch_x86_64)	
    // count opcode bytes (1 or 2)
+   unsigned nPrefixes = count_prefixes(insnType);
    unsigned nOpcodeBytes = 1;
    if (*(origInsn + nPrefixes) == 0x0F) {
       nOpcodeBytes = 2;
@@ -1166,10 +1170,7 @@ bool insnCodeGen::modifyData(Address targetAddr, instruction &insn, codeGen &gen
           nOpcodeBytes = 3;  
        }
    }
-   
-   Register pointer_reg = (Register)-1;
-     
-#if defined(arch_x86_64)	
+
    if (!is_disp32(newDisp+insnSz) && !is_addr32(targetAddr)) {
       // Case C: replace with 64-bit.
       is_data_abs64 = true;

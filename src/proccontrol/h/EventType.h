@@ -63,6 +63,9 @@ class PC_EXPORT EventType
    static const int AsyncWrite          = 22;
    static const int AsyncReadAllRegs    = 23;
    static const int AsyncSetAllRegs     = 24;
+   static const int AsyncFileRead       = 25;
+   static const int PreSyscall          = 26;
+   static const int PostSyscall         = 27;
 
    //These aren't completely real events.  They can have callbacks registered, but won't be delivered.
    // Instead, a real event will be delivered to their callback.  E.g, a callback registered for 
@@ -88,6 +91,7 @@ class PC_EXPORT EventType
    static const int WinStopThreadDestroy = 511;
    static const int PreBootstrap        = 512;
    static const int Continue            = 513;
+   static const int PostponedSyscall    = 514;
 
    //Users should define their own events at this value or higher.
    static const int MaxProcCtrlEvent    = 1000;

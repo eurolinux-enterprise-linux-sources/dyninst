@@ -45,8 +45,8 @@
 
 #include "pcEventMuxer.h"
 
-#include "common/h/headers.h"
-#include "common/h/linuxKludges.h"
+#include "common/src/headers.h"
+#include "common/src/linuxKludges.h"
 
 #include "symtabAPI/h/Symtab.h"
 using namespace Dyninst::SymtabAPI;
@@ -150,9 +150,8 @@ bool PCEventMuxer::useBreakpoint(Dyninst::ProcControlAPI::EventType et)
    // Pre-events are breakpoint
    // Post-events are callback
    if (et.time() == EventType::Pre &&
-       ((et.code() == EventType::Exit) ||
-        (et.code() == EventType::Fork) ||
-        (et.code() == EventType::Exec))) return true;
+       ((et.code() == EventType::Fork) ||
+	(et.code() == EventType::Exec))) return true;
    return false;
 }
 
@@ -164,10 +163,12 @@ bool PCEventMuxer::useCallback(Dyninst::ProcControlAPI::EventType et)
 
    // Pre-events are breakpoint
    // Post-events are callback
-   if (et.time() == EventType::Post &&
-       ((et.code() == EventType::Exit) ||
-        (et.code() == EventType::Fork) ||
+  if(et.code() == EventType::Exit) return true;
+  
+  if (et.time() == EventType::Post &&
+       ((et.code() == EventType::Fork) ||
         (et.code() == EventType::Exec))) return true;
+  
    return false;
 }
 

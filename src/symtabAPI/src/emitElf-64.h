@@ -68,15 +68,9 @@ class emitElf64{
     char *olddynStrData;
     unsigned olddynStrSize;
     Elf_Data *symTabData;
-    Elf_Data *hashData;
     Elf_Data *dynsymData;
     Elf_Data *dynData;
-    Elf_Data *rodata;
-    Elf_Data *dataData;
-    
-    Elf64_Shdr *textSh;
-    Elf64_Shdr *rodataSh;
-    
+
     Elf_Scn *phdrs_scn;
 
     std::vector<Region *>nonLoadableSecs;
@@ -98,8 +92,8 @@ class emitElf64{
     Elf64_Off newSegmentStart;
     Elf64_Shdr *firstNewLoadSec;// initialize to NULL
  
-    //text & data segment ends
-    Elf64_Off dataSegEnd, textSegEnd;
+    // data segment end
+    Elf64_Off dataSegEnd;
 	 Elf64_Off dynSegOff, dynSegAddr, phdrSegOff, phdrSegAddr;
     unsigned dynSegSize;
 

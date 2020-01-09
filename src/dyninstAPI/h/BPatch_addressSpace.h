@@ -102,9 +102,7 @@ class BPATCH_DLL_EXPORT BPatchSnippetHandle {
   // low-level mappings for removal
   std::vector<Dyninst::PatchAPI::InstancePtr> instances_;
 
-  //  a flag for catchup
-  bool catchupNeeded;
-  //  and a list of threads to apply catchup to
+  // a list of threads to apply catchup to
   BPatch_Vector<BPatch_thread *> catchup_threads;
     
   BPatchSnippetHandle(BPatch_addressSpace * addSpace);
@@ -120,6 +118,10 @@ class BPATCH_DLL_EXPORT BPatchSnippetHandle {
   // have multiple instances of instrumentation due to function
   // relocation.
   bool usesTrap();
+  bool isEmpty() 
+  {
+    return instances_.empty();
+  }
   
 
   // mtHandles_ is not empty, , returns the function that the 

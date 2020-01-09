@@ -56,17 +56,6 @@ typedef union {
    } pair64;
 } ra_fp_pair_t;
 
-#elif defined(os_aix)
-
-#define GET_FRAME_BASE(spr) __asm__("or %0, 1, 1\n" : "=r"(spr))
-typedef union {
-   struct {
-      uint32_t out_fp;
-      uint32_t unused;
-      uint32_t out_ra;
-   } pair32;
-} ra_fp_pair_t;
-
 #else
 
 #error Unknown platform
@@ -103,7 +92,7 @@ bool ProcSelf::getRegValue(Dyninst::MachRegister reg, THR_ID, Dyninst::MachRegis
   }
 
   sw_printf("[%s:%u] - Returning value %lx for reg %s\n", 
-            __FILE__, __LINE__, val, reg.name().c_str());
+            FILE__, __LINE__, val, reg.name().c_str());
   return true;
 }
 
@@ -147,7 +136,7 @@ gcframe_ret_t FrameFuncStepperImpl::getCallerFrame(const Frame &in, Frame &out)
   if (helper && in.isTopFrame())
   {
     alloc_frame = helper->allocatesFrame(in.getRA());
-    sw_printf("[%s:%u] - FrameFuncHelper for 0x%lx reports %d, %d\n", __FILE__, __LINE__,
+    sw_printf("[%s:%u] - FrameFuncHelper for 0x%lx reports %d, %d\n", FILE__, __LINE__,
               in.getRA(), alloc_frame.first, alloc_frame.second);
   }
 
@@ -169,7 +158,7 @@ gcframe_ret_t FrameFuncStepperImpl::getCallerFrame(const Frame &in, Frame &out)
                                          sizeof(this_frame_pair.pair32));
   }
   if (!result) {
-    sw_printf("[%s:%u] - Couldn't read from %lx\n", __FILE__, __LINE__, in_fp);
+    sw_printf("[%s:%u] - Couldn't read from %lx\n", FILE__, __LINE__, in_fp);
     return gcf_error;
   }
 
@@ -183,7 +172,7 @@ gcframe_ret_t FrameFuncStepperImpl::getCallerFrame(const Frame &in, Frame &out)
                                         sizeof(last_frame_pair.pair32));
   }
   if (!result) {
-    sw_printf("[%s:%u] - Couldn't read from %lx\n", __FILE__, __LINE__,
+    sw_printf("[%s:%u] - Couldn't read from %lx\n", FILE__, __LINE__,
 	      out.getFP());
     return gcf_error;
   }
@@ -214,7 +203,7 @@ gcframe_ret_t FrameFuncStepperImpl::getCallerFrame(const Frame &in, Frame &out)
     }
     if (!result) {
         sw_printf("[%s:%u] - Error getting PC value for thrd %d\n",
-                  __FILE__, __LINE__, (int) in.getThread());
+                  FILE__, __LINE__, (int) in.getThread());
         return gcf_error;
     }
   }
@@ -330,7 +319,7 @@ gcframe_ret_t DyninstDynamicStepperImpl::getCallerFrameArch(const Frame &in, Fra
                                         sizeof(ra_fp_pair.pair32));
   }
   if (!result) {
-    sw_printf("[%s:%u] - Couldn't read frame from %lx\n", __FILE__, __LINE__, in_fp);
+    sw_printf("[%s:%u] - Couldn't read frame from %lx\n", FILE__, __LINE__, in_fp);
     return gcf_error;
   }
   if (sizeof(uint64_t) == addrWidth) {
@@ -348,7 +337,7 @@ gcframe_ret_t DyninstDynamicStepperImpl::getCallerFrameArch(const Frame &in, Fra
   result = getProcessState()->readMem(&out_ra, raLocation.val.addr, 
                                       sizeof(out_ra));
   if (!result) {
-    sw_printf("[%s:%u] - Couldn't read instrumentation RA from %lx\n", __FILE__, __LINE__, raLocation.val.addr);
+    sw_printf("[%s:%u] - Couldn't read instrumentation RA from %lx\n", FILE__, __LINE__, raLocation.val.addr);
     return gcf_error;
   }
   out.setRA(out_ra);

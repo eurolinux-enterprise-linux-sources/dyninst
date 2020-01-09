@@ -69,13 +69,13 @@ using namespace std;
 #include <stdio.h>
 #include <algorithm>
 
-#if defined(USES_DWARF_DEBUG)
+#if defined(cap_dwarf)
 #include "dwarf.h"
 #include "libdwarf.h"
 #endif
 
 //#include "symutil.h"
-#include "common/h/pathName.h"
+#include "common/src/pathName.h"
 #include "Collections.h"
 #if defined(TIMED_PARSE)
 #include <sys/time.h>
@@ -89,7 +89,7 @@ using namespace std;
 #include <boost/assign/list_of.hpp>
 #include <boost/assign/std/set.hpp>
 
-#include "dynutil/h/SymReader.h"
+#include "common/h/SymReader.h"
 
 using namespace boost::assign;
 
@@ -410,13 +410,6 @@ bool Object::loaded_elf(Offset& txtaddr, Offset& dataddr,
    stab_indx_off_ = 0;
    stab_indx_size_ = 0;
    stabstr_indx_off_ = 0;
-#if defined(os_irix)
-   MIPS_stubs_addr_ = 0;
-   MIPS_stubs_off_ = 0;
-   MIPS_stubs_size_ = 0;
-   got_zero_index_ = -1;
-   dynsym_zero_index_ = -1;
-#endif
    dwarvenDebugInfo = false;
 
    txtaddr = 0;
@@ -1375,13 +1368,15 @@ bool Object::get_relocation_entries( Elf_X_Shdr *&rel_plt_scnp,
               // parsing.
               if (!targ_sym) continue;
               
-              // I'm interested to see if these asserts will ever fail.
-              assert(iter->second.size() == 1);
-              assert(plt_rel_map.count(name) == 1);
+              if (iter->second.size() != 1)
+                 continue;
+              dyn_hash_map<string, Offset>::iterator pltrel_iter = plt_rel_map.find(name);
+              if (pltrel_iter == plt_rel_map.end())
+                 continue;
               
               Symbol *stub_sym = iter->second[0];
               relocationEntry re(stub_sym->getOffset(),
-                                 plt_rel_map[name],
+                                 pltrel_iter->second,
                                  name,
                                  targ_sym);
               fbt_.push_back(re);
@@ -2250,6 +2245,8 @@ void Object::parse_dynamicSymbols (Elf_X_Shdr *&
     case DT_VERDEFNUM:
       verdefnum = dyns.d_ptr(i);
       break;
+    case DT_SONAME:
+      soname_ = &strs[dyns.d_ptr(i)];
     default:
       break;
     }
@@ -2386,7 +2383,7 @@ void Object::parse_dynamicSymbols (Elf_X_Shdr *&
 #endif
 }
 
-#if defined(USES_DWARF_DEBUG)
+#if defined(cap_dwarf)
 
 string Object::find_symbol(string name)
 {
@@ -2421,7 +2418,7 @@ string Object::find_symbol(string name)
  *
  ********************************************************/
 
-#if defined(USES_DWARF_DEBUG)
+#if defined(cap_dwarf)
 
 void pd_dwarf_handler(Dwarf_Error error, Dwarf_Ptr /*userData*/)
 {
@@ -2530,7 +2527,8 @@ bool Object::fixSymbolsInModule( Dwarf_Debug dbg, string & moduleName, Dwarf_Die
                status = dwarf_global_formref(specificationAttribute, &specificationOffset, NULL);
                if (status != DW_DLV_OK) goto error;
 
-               status = dwarf_offdie( dbg, specificationOffset, & nameEntry, NULL );
+               Dwarf_Bool is_info = dwarf_get_die_infotypes_flag(dieEntry);
+               status = dwarf_offdie_b( dbg, specificationOffset, is_info, & nameEntry, NULL );
                if (status != DW_DLV_OK) goto error;
 
                dwarf_dealloc( dbg, specificationAttribute, DW_DLA_ATTR );
@@ -2554,6 +2552,8 @@ bool Object::fixSymbolsInModule( Dwarf_Debug dbg, string & moduleName, Dwarf_Die
             /* Prefer the linkage (symbol table) name. */
             Dwarf_Attribute linkageNameAttribute;
             status = dwarf_attr(nameEntry, DW_AT_MIPS_linkage_name, &linkageNameAttribute, NULL);
+            if (status != DW_DLV_OK)
+               status = dwarf_attr(nameEntry, DW_AT_linkage_name, &linkageNameAttribute, NULL);
             if (status == DW_DLV_ERROR) goto error;
 
             bool hasLinkageName = false;
@@ -2594,7 +2594,8 @@ bool Object::fixSymbolsInModule( Dwarf_Debug dbg, string & moduleName, Dwarf_Die
                while ( true ) 
                {
                   Dwarf_Die priorSibling = siblingDie;
-                  status = dwarf_siblingof( dbg, siblingDie, & siblingDie, NULL );
+                  Dwarf_Bool is_info = dwarf_get_die_infotypes_flag(priorSibling);
+                  status = dwarf_siblingof_b( dbg, priorSibling, is_info, & siblingDie, NULL );
                   if (status == DW_DLV_ERROR) goto error;
 
                   if ( ! first ) 
@@ -2744,7 +2745,8 @@ bool Object::fixSymbolsInModule( Dwarf_Debug dbg, string & moduleName, Dwarf_Die
 
                dwarf_dealloc( dbg, specificationAttribute, DW_DLA_ATTR );
 
-               status = dwarf_offdie( dbg, specificationOffset, & nameEntry, NULL );
+               Dwarf_Bool is_info = dwarf_get_die_infotypes_flag(dieEntry);
+               status = dwarf_offdie_b( dbg, specificationOffset, is_info, & nameEntry, NULL );
                if (status != DW_DLV_OK) goto error;
 
             } /* end if the DIE has a specification. */
@@ -2759,6 +2761,8 @@ bool Object::fixSymbolsInModule( Dwarf_Debug dbg, string & moduleName, Dwarf_Die
 
             Dwarf_Attribute linkageNameAttribute;
             status = dwarf_attr(nameEntry, DW_AT_MIPS_linkage_name, &linkageNameAttribute, NULL);
+            if (status != DW_DLV_OK)
+               status = dwarf_attr(nameEntry, DW_AT_linkage_name, &linkageNameAttribute, NULL);
             if (status == DW_DLV_ERROR) goto error;
 
             if ( status == DW_DLV_OK ) 
@@ -2824,7 +2828,10 @@ bool Object::fixSymbolsInModule( Dwarf_Debug dbg, string & moduleName, Dwarf_Die
    /* Recurse to its sibling, if any. */
 
    Dwarf_Die siblingDwarf;
-   status = dwarf_siblingof( dbg, dieEntry, & siblingDwarf, NULL );
+   {
+      Dwarf_Bool is_info = dwarf_get_die_infotypes_flag(dieEntry);
+      status = dwarf_siblingof_b( dbg, dieEntry, is_info, & siblingDwarf, NULL );
+   }
    if (status == DW_DLV_ERROR) goto error;
 
    if ( status == DW_DLV_OK ) 
@@ -2884,16 +2891,19 @@ bool Object::fix_global_symbol_modules_static_dwarf()
 
    IntervalTree<Dwarf_Addr, std::string> module_ranges;
 
+   /* Only .debug_info for now, not .debug_types */
+   Dwarf_Bool is_info = 1;
+
    /* Iterate over the CU headers. */
-   while ( dwarf_next_cu_header_c( dbg, 1, 
+   while ( dwarf_next_cu_header_c( dbg, is_info,
 				   NULL, NULL, NULL, // len, stamp, abbrev
 				   NULL, NULL, NULL, // address, offset, extension
 				   NULL, NULL, // signature, typeoffset
-				   & hdr, NULL ) == DW_DLV_OK ) 
+				   & hdr, NULL ) == DW_DLV_OK )
    {
       /* Obtain the module DIE. */
       Dwarf_Die moduleDIE;
-      status = dwarf_siblingof( dbg, NULL, & moduleDIE, NULL );
+      status = dwarf_siblingof_b( dbg, NULL, is_info, & moduleDIE, NULL );
       if (status != DW_DLV_OK) goto error;
 
       /* Make sure we've got the right one. */
@@ -2990,7 +3000,7 @@ bool Object::fix_global_symbol_modules_static_dwarf()
 bool Object::fix_global_symbol_modules_static_dwarf()
 { return false; }
 
-#endif // USES_DWARF_DEBUG
+#endif // cap_dwarf
 
 /********************************************************
  *
@@ -3237,7 +3247,7 @@ void Object::find_code_and_data(Elf_X &elf,
         Elf_X_Phdr &phdr = elf.get_phdr(i);
 
         char *file_ptr = (char *)mf->base_addr();
-
+        /*
         if(!isRegionPresent(phdr.p_paddr(), phdr.p_filesz(), phdr.p_flags())) {
             Region *reg = new Region(i, "", phdr.p_paddr(), phdr.p_filesz(),
                                      phdr.p_vaddr(), phdr.p_memsz(),
@@ -3247,7 +3257,7 @@ void Object::find_code_and_data(Elf_X &elf,
             reg->setFileOffset(phdr.p_offset());
             regions_.push_back(reg);
         }
-
+        */
         // The code pointer, offset, & length should be set even if
         // txtaddr=0, so in this case we set these values by
         // identifying the segment that contains the entryAddress
@@ -3280,10 +3290,6 @@ const char *Object::elf_vaddr_to_ptr(Offset vaddr) const
   const char *ret = NULL;
   unsigned code_size_ = code_len_;
   unsigned data_size_ = data_len_;
-
-#if defined(os_irix)
-  vaddr -= base_addr;
-#endif
 
   if (vaddr >= code_off_ && vaddr < code_off_ + code_size_) {
     ret = ((char *)code_ptr_) + (vaddr - code_off_);
@@ -3320,17 +3326,37 @@ stab_entry *Object::get_stab_info() const
 
 Object::Object(MappedFile *mf_, bool, void (*err_func)(const char *), 
 	       bool alloc_syms) :
-  AObject(mf_, err_func), 
+  AObject(mf_, err_func),
+  elfHdr(NULL),
   hasReldyn_(false),
   hasReladyn_(false),
   hasRelplt_(false),
   hasRelaplt_(false),
   relType_(Region::RT_REL),
-  opd_addr_(0),
-  opd_size_(0),
+  isBlueGeneP_(false), isBlueGeneQ_(false),
+  hasNoteSection_(false),
+  elf_hash_addr_(0), gnu_hash_addr_(0),
+  dynamic_offset_(0), dynamic_size_(0), dynsym_size_(0),
+  init_addr_(0), fini_addr_(0),
+  text_addr_(0), text_size_(0),
+  symtab_addr_(0), strtab_addr_(0),
+  dynamic_addr_(0), dynsym_addr_(0), dynstr_addr_(0),
+  got_addr_(0), got_size_(0),
+  plt_addr_(0), plt_size_(0), plt_entry_size_(0),
+  rel_plt_addr_(0), rel_plt_size_(0), rel_plt_entry_size_(0),
+  rel_addr_(0), rel_size_(0), rel_entry_size_(0),
+  opd_addr_(0), opd_size_(0),
+  stab_off_(0), stab_size_(0), stabstr_off_(0),
+  stab_indx_off_(0), stab_indx_size_(0), stabstr_indx_off_(0),
+  dwarvenDebugInfo(false),
+  loadAddress_(0), entryAddress_(0),
+  interpreter_name_(NULL),
+  isStripped(false),
   dwarf(NULL),
-  EEL(false),
-  DbgSectionMapSorted(false)
+  EEL(false), did_open(false),
+  obj_type_(obj_Unknown),
+  DbgSectionMapSorted(false),
+  soname_(NULL)
 {
 
 #if defined(TIMED_PARSE)
@@ -3338,9 +3364,6 @@ Object::Object(MappedFile *mf_, bool, void (*err_func)(const char *),
   gettimeofday(&starttime, NULL);
 #endif
   is_aout_ = false;
-  did_open = false;
-  interpreter_name_ = NULL;
-  isStripped = false;
 
   if(mf->getFD() != -1) {
      elfHdr = Elf_X::newElf_X(mf->getFD(), ELF_C_READ, NULL, mf_->pathname());
@@ -3392,34 +3415,10 @@ Object::Object(MappedFile *mf_, bool, void (*err_func)(const char *),
 #endif
 }
 
-Object::Object(const Object& obj)
-  : AObject(obj), 
-    dwarf(NULL),
-    EEL(false)
-{
-  interpreter_name_ = obj.interpreter_name_;
-  isStripped = obj.isStripped;
-  loadAddress_ = obj.loadAddress_;
-  entryAddress_ = obj.entryAddress_;
-  relocation_table_ = obj.relocation_table_;
-  fbt_ = obj.fbt_;
-  elfHdr = obj.elfHdr;
-  deps_ = obj.deps_;
-  DbgSectionMapSorted = obj.DbgSectionMapSorted;
-  relType_ = obj.relType_;
-}
-
 Object::~Object()
 {
-  unsigned i;
   relocation_table_.clear();
   fbt_.clear();
-  for(i=0; i<allRegionHdrs.size();i++) {
-#if !defined(os_freebsd)
-    // This claims a double-delete on FreeBSD
-    delete allRegionHdrs[i];
-#endif
-  }
   allRegionHdrs.clear();
   versionMapping.clear();
   versionFileNameMapping.clear();
@@ -3623,6 +3622,7 @@ static signed long read_sleb128(const unsigned char *data, unsigned *bytes_read)
   if (shift < sizeof(int) && (data[*bytes_read] & 0x40))
     result |= -(1 << shift);
   (*bytes_read)++;
+  
   return result;
 }
 
@@ -3735,7 +3735,6 @@ static int read_val_of_type(int type, unsigned long *value, const unsigned char 
 	*value &= ~(0x7l);
       }
     }
-
   return size;
 }
 
@@ -3976,6 +3975,10 @@ int read_except_table_gcc3(Dwarf_Fde *fde_data, Dwarf_Signed fde_count,
     table_end += except_off;
 
     while (except_off < table_end && except_off < except_size) {
+      Offset tryStart;
+      Offset tryEnd;
+      Offset catchStart;
+      
       //The entries in the gcc_except_table are the following format:
       //   <type>   region start
       //   <type>   region length
@@ -3983,14 +3986,22 @@ int read_except_table_gcc3(Dwarf_Fde *fde_data, Dwarf_Signed fde_count,
       //  uleb128   action
       //The 'region' is the try block, the 'landing pad' is the catch.
       mi.pc = except_scn->sh_addr() + except_off;
+      tryStart = except_off;
+      //cerr << "Reading tryStart at " <<  except_off;
+      
       except_off += read_val_of_type(table_format, &region_start, 
 				     datap + except_off, mi);
       mi.pc = except_scn->sh_addr() + except_off;
+      tryEnd = except_off;
+      //cerr << "Reading tryEnd at " << except_off;
       except_off += read_val_of_type(table_format, &region_size, 
 				     datap + except_off, mi);
       mi.pc = except_scn->sh_addr() + except_off;
+      catchStart = except_off;
+      //cerr << "Reading catchStart at " <<  except_off;
       except_off += read_val_of_type(table_format, &catch_block, 
 				     datap + except_off, mi);
+      //cerr << "Reading action (uleb128) at " << except_off;
       except_off += read_val_of_type(DW_EH_PE_uleb128, &action, 
 				     datap + except_off, mi);
 
@@ -3998,6 +4009,10 @@ int read_except_table_gcc3(Dwarf_Fde *fde_data, Dwarf_Signed fde_count,
 	continue;
       ExceptionBlock eb(region_start + low_pc, (unsigned) region_size, 
 			catch_block + low_pc);
+      eb.setTryStart(tryStart);
+      eb.setTryEnd(tryEnd);
+      eb.setCatchStart(catchStart);
+      
       addresses.push_back(eb);
     }
   }
@@ -4019,9 +4034,9 @@ static bool read_except_table_gcc2(Elf_X_Shdr *except_table,
                                    std::vector<ExceptionBlock> &addresses,
                                    const mach_relative_info &mi)
 {
-  Offset try_start;
-  Offset try_end;
-  Offset catch_start;
+  Offset try_start = (Offset) -1;
+  Offset try_end = (Offset) -1;
+  Offset catch_start = 0;
 
   Elf_X_Data data = except_table->get_data();
   const unsigned char *datap = (const unsigned char *)data.get_string();
@@ -4029,6 +4044,7 @@ static bool read_except_table_gcc2(Elf_X_Shdr *except_table,
 
   unsigned i = 0;
   while (i < except_size) {
+    ExceptionBlock eb;
     if (mi.word_size == 4) {
       i += read_val_of_type(DW_EH_PE_udata4, &try_start, datap + i, mi);
       i += read_val_of_type(DW_EH_PE_udata4, &try_end, datap + i, mi);
@@ -4351,13 +4367,20 @@ void Object::getModuleLanguageInfo(dyn_hash_map<string, supportedLanguages> *mod
       Dwarf_Attribute languageAttribute = NULL;
       bool done = false;
 
+      /* Only .debug_info for now, not .debug_types */
+      Dwarf_Bool is_info = 1;
+
       while( !done && 
-             dwarf_next_cu_header(dbg, NULL, NULL, NULL, NULL, & hdr, NULL) == DW_DLV_OK )
+             dwarf_next_cu_header_c( dbg, is_info,
+                                     NULL, NULL, NULL, // len, stamp, abbrev
+                                     NULL, NULL, NULL, // address, offset, extension
+                                     NULL, NULL, // signature, typeoffset
+                                     & hdr, NULL ) == DW_DLV_OK )
 	{
 	  Dwarf_Half moduleTag;
 	  Dwarf_Unsigned languageConstant;
 
-	  status = dwarf_siblingof(dbg, NULL, &moduleDIE, NULL);
+	  status = dwarf_siblingof_b(dbg, NULL, is_info, &moduleDIE, NULL);
 	  if (status != DW_DLV_OK) {
             done = true;
             goto cleanup_dwarf;
@@ -4399,9 +4422,19 @@ void Object::getModuleLanguageInfo(dyn_hash_map<string, supportedLanguages> *mod
 	    {
             case DW_LANG_C:
             case DW_LANG_C89:
+            case DW_LANG_C99:
+#ifdef DW_LANG_C11
+            case DW_LANG_C11:
+#endif
 	      (*mod_langs)[working_module] = lang_C;
 	      break;
             case DW_LANG_C_plus_plus:
+#ifdef DW_LANG_C_plus_plus_03
+            case DW_LANG_C_plus_plus_03:
+#endif
+#ifdef DW_LANG_C_plus_plus_11
+            case DW_LANG_C_plus_plus_11:
+#endif
 	      (*mod_langs)[working_module] = lang_CPlusPlus;
 	      break;
             case DW_LANG_Fortran77:
@@ -4733,13 +4766,20 @@ void Object::parseDwarfFileLineInfo(dyn_hash_map<std::string, LineInformation> &
 		return; 
 	Dwarf_Debug &dbg = *dbg_ptr;
 
+        /* Only .debug_info for now, not .debug_types */
+        Dwarf_Bool is_info = 1;
+
 	/* Itereate over the CU headers. */
 	Dwarf_Unsigned header;
-	while ( dwarf_next_cu_header( dbg, NULL, NULL, NULL, NULL, & header, NULL ) == DW_DLV_OK ) 
+	while ( dwarf_next_cu_header_c( dbg, is_info,
+                                        NULL, NULL, NULL, // len, stamp, abbrev
+                                        NULL, NULL, NULL, // address, offset, extension
+                                        NULL, NULL, // signature, typeoffset
+                                        & header, NULL ) == DW_DLV_OK )
 	{
 		/* Acquire the CU DIE. */
 		Dwarf_Die cuDIE;
-		int status = dwarf_siblingof( dbg, NULL, & cuDIE, NULL);
+		int status = dwarf_siblingof_b( dbg, NULL, is_info, & cuDIE, NULL);
 		if ( status != DW_DLV_OK ) { 
 			/* If we can get no (more) CUs, we're done. */
 			break;
@@ -4915,10 +4955,10 @@ void Object::parseTypeInfo(Symtab *obj)
 #endif	 
 
 	parseStabTypes(obj);
-
-   DwarfWalker walker(obj, *(dwarf->type_dbg()));
-   walker.parse();
-   //parseDwarfTypes(obj);
+	Dwarf_Debug* typeInfo = dwarf->type_dbg();
+	if(!typeInfo) return;
+	DwarfWalker walker(obj, *typeInfo);
+	walker.parse();
         
 #if defined(TIMED_PARSE)
 	struct timeval endtime;
@@ -5561,4 +5601,13 @@ void Object::getSegmentsSymReader(vector<SymSegment> &segs) {
 
       segs.push_back(seg);
    }
+}
+
+std::string Object::getFileName() const
+{
+  if(soname_) {
+    return soname_;
+  }
+  
+  return mf->filename();
 }

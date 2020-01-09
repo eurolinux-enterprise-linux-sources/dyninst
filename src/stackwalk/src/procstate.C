@@ -31,7 +31,7 @@
 #include "stackwalk/h/swk_errors.h"
 #include "stackwalk/h/procstate.h"
 #include "stackwalk/src/libstate.h"
-#include "common/h/headers.h"
+#include "common/src/headers.h"
 #include <assert.h>
 #include <string>
 #include <vector>
@@ -70,14 +70,16 @@ public:
 std::map<Dyninst::PID, ProcessState *> ProcessState::proc_map;
 
 ProcessState::ProcessState(Dyninst::PID pid_, std::string executable_path_) :
+   pid(NULL_PID),
    library_tracker(NULL),
+   walker(NULL),
    executable_path(executable_path_)
 {
    std::map<PID, ProcessState *>::iterator i = proc_map.find(pid_);
    if (i != proc_map.end())
    {
       sw_printf("[%s:%u] - Already attached to debuggee %d\n",
-                __FILE__, __LINE__, pid_);
+                FILE__, __LINE__, pid_);
       setLastError(err_badparam, "Attach requested to already " \
                    "attached process");
       return;

@@ -28,7 +28,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "common/h/Time.h"
+#include "common/src/Time.h"
 #include <iostream>
 #include <time.h>
 #include <string.h>
@@ -36,7 +36,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <limits.h>
-#include "common/h/int64iostream.h"
+#include "common/src/int64iostream.h"
 
 
 timeUnit::ostream_fmt timeUnit::curFmt = timeUnit::sparse;
@@ -399,7 +399,7 @@ ostream& operator<<(ostream&s, timeStamp z) {
 #if !defined(os_windows)
     ostream::fmtflags oldflags;
 #else
-    long oldflags;  // irix,nt environment doesn't define ostream::fmtflags
+    long oldflags;  // nt environment doesn't define ostream::fmtflags
 #endif
     oldflags = s.flags(ostream::oct);
     s << "[1970 + " << tl << "]"; 

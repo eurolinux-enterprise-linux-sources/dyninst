@@ -34,9 +34,9 @@
 #define FUNCTION_H
 
 #include <string>
-#include "common/h/Vector.h"
-#include "common/h/Types.h"
-#include "common/h/Pair.h"
+#include "common/src/Vector.h"
+#include "common/src/Types.h"
+#include "common/src/Pair.h"
 #include "codegen.h"
 #include "codeRange.h"
 #include "util.h"
@@ -294,7 +294,7 @@ class func_instance : public patchTarget, public Dyninst::PatchAPI::PatchFunctio
   // Defensive mode
   BlockSet unresolvedCF_;
   BlockSet abruptEnds_;
-  unsigned int prevBlocksAbruptEnds_; // num func blocks when calculated
+  size_t prevBlocksAbruptEnds_; // num func blocks when calculated
 
 
   Address handlerFaultAddr_; /* if this is a signal handler, faultAddr_ is

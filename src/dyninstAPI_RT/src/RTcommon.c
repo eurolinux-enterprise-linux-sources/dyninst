@@ -40,19 +40,14 @@
 #include "RTcommon.h"
 #include "RTthread.h"
 
-#if defined(rs6000_ibm_aix4_1)
-#include <sys/mman.h>
-#include <sys/types.h>
-#endif
-
 unsigned int DYNINSTobsCostLow;
-unsigned int DYNINSThasInitialized = 0;
-unsigned DYNINST_max_num_threads;
+DLLEXPORT unsigned int DYNINSThasInitialized = 0;
+unsigned DYNINST_max_num_threads = MAX_THREADS;
 struct DYNINST_bootstrapStruct DYNINST_bootstrap_info;
 char gLoadLibraryErrorString[ERROR_STRING_LENGTH];
 int DYNINSTdebugRTlib = 0;
 
-int DYNINSTstaticMode = 1;
+DLLEXPORT int DYNINSTstaticMode = 1;
 
 /**
  * Allocate the Dyninst heaps
@@ -66,7 +61,7 @@ int DYNINSTstaticMode = 1;
 #if defined(os_linux) || defined(os_freebsd)
 #define HEAP_LOCAL extern
 #else
-#define HEAP_LOCAL
+#define HEAP_LOCAL DLLEXPORT
 #endif
 
 HEAP_LOCAL HEAP_TYPE DYNINSTglobalData[SYN_INST_BUF_SIZE/sizeof(HEAP_TYPE)] ALIGN_ATTRIB;
@@ -90,15 +85,15 @@ const unsigned long sizeOfAnyHeap1 = sizeof( DYNINSTstaticHeap_32K_anyHeap_1 );
  * system-provided events. On others we do it ourselves.  Enumerated type 
  * defined in header file
  **/
-DYNINST_synch_event_t DYNINST_synch_event_id = DSE_undefined;
-void *DYNINST_synch_event_arg1;
+DLLEXPORT DYNINST_synch_event_t DYNINST_synch_event_id = DSE_undefined;
+DLLEXPORT void *DYNINST_synch_event_arg1;
 /* Code to read args 2,3 would have to be moved from dyninstAPI's*/
 /* process::handleStopThread to signalgenerator::decodeRTSignal in*/
 /* order for other signals to make use of them, as currently only the*/
 /* stopThread event needs makes use of them.  */
-void *DYNINST_synch_event_arg2 = NULL; /* not read in dyninst's decodeRTSignal*/
-void *DYNINST_synch_event_arg3 = NULL; /* not read in dyninst's decodeRTSignal*/
-int DYNINST_break_point_event = 0;
+DLLEXPORT void *DYNINST_synch_event_arg2 = NULL; /* not read in dyninst's decodeRTSignal*/
+DLLEXPORT void *DYNINST_synch_event_arg3 = NULL; /* not read in dyninst's decodeRTSignal*/
+DLLEXPORT int DYNINST_break_point_event = 0;
 
 /**
  * These variables are used to pass arguments into DYNINSTinit
@@ -115,14 +110,14 @@ int isMutatedExec = 0;
 
 // stopThread cache variables 
 char cacheLRUflags[TARGET_CACHE_WIDTH];
-void *DYNINST_target_cache[TARGET_CACHE_WIDTH][TARGET_CACHE_WAYS];
+DLLEXPORT void *DYNINST_target_cache[TARGET_CACHE_WIDTH][TARGET_CACHE_WAYS];
 FILE *stOut;
 int fakeTickCount;
 
 
 unsigned *DYNINST_tramp_guards;
 
-unsigned DYNINST_default_tramp_guards[MAX_THREADS+1];
+DLLEXPORT unsigned DYNINST_default_tramp_guards[MAX_THREADS+1];
 
 #if defined(os_linux)
 void DYNINSTlinuxBreakPoint();
@@ -147,45 +142,7 @@ static void initTrampGuards(unsigned maxthreads)
 {
 
    unsigned i;
-#if defined(rs6000_ibm_aix4_1)
-	/* 	WHAT IS GOING ON HERE?
-		For save the world to work, the DYNINST_tramp_guards must be reloaded in the
-		exact same place when the mutated binary is run.  Normally, DYNINST_tramp_guards
-		is allocated by malloc (See below).  This does not work for AIX because before
-		we get to the init section of the RT lib, which reloads DYNINST_tramp_guards, the
-		address DYNINST_tramp_guards needs to be loaded at has been allocated and is in
-		use.  To get around this, I am using mmap to allocate DYNINST_tramp_guards on
-		AIX.  I am allocating to a MAP_VARIABLE location because there is no address that
-		is always known to be free that we can allocate.  This way, when the init section
-		of the RT lib is run this address will probably be free (with a little magic in 
-		loadFile() in RTmutatedBinary_XCOFF.c.
 
-		Just in case we cannot mmap the space we need here (at this point in execution I
-		cannot imagine this happening, if you want to do anything useful with Dyninst) I fall
-		back to malloc and print a warning that save the world will probably not work.
-	*/
-	
-/* http://publibn.boulder.ibm.com/doc_link/en_US/a_doc_lib/aixprggd/genprogc/sys_mem_alloc.htm#HDRA9E4A4C9921SYLV */
-	unsigned int memLoc = sbrk(0);
-	int pageSize = getpagesize();
-	int arraySize = ((maxthreads +1) * sizeof(unsigned));
-	arraySize -= (arraySize  % pageSize);
-	arraySize +=  pageSize;
-
-	/*fprintf(stderr,"TRAMP GUARDS (sbrk 0x%x)\n",sbrk(0));*/
-
-	/*fprintf(stderr, "MMAP: 0x%x,0x%x,,,1,0x0\n",memLoc,arraySize);*/
-	DYNINST_tramp_guards = (unsigned *) mmap(0x0, arraySize, PROT_READ|PROT_WRITE, MAP_VARIABLE|MAP_ANONYMOUS, -1,0x0);
-
-	if (DYNINST_tramp_guards == (unsigned *) -1){
-		perror("mmap: DYNINST_tramp_guards ");
-		fprintf(stderr,"Warning: DYNINST_tramp_guards may not be allocated correctly for save the world code!\n");
-   		DYNINST_tramp_guards = (unsigned *) malloc((maxthreads+1)*sizeof(unsigned));
-	}
-
-	/*fprintf(stderr,"TRAMP GUARDS 0x%x (sbrk 0x%x)\n", DYNINST_tramp_guards,sbrk(0));*/
-
-#else
    /*We allocate maxthreads+1 because maxthreads is sometimes used as an*/
    /*error value to mean we don't know what thread this is.  Sometimes used*/
    /*during the early setup phases.*/
@@ -195,7 +152,6 @@ static void initTrampGuards(unsigned maxthreads)
    else {
       DYNINST_tramp_guards = (unsigned *) malloc((maxthreads+1)*sizeof(unsigned));
    }
-#endif
    for (i=0; i<maxthreads; i++)
    {
       DYNINST_tramp_guards[i] = 1;
@@ -227,8 +183,6 @@ void DYNINSTBaseInit()
  * main() via libdyninstAPI_RT_init (defined in RTposix.c and RTwinnt.c).
  * libdyninstAPI_RT_init is called by one of the following methods:
  *    GCC: link with gcc -shared, and use __attribute__((constructor));
- *    AIX: ld with -binitfini:libdyninstAPI_RT_init
- *    Solaris: ld with -z initarray=libdyninstAPI_RT_init
  *    Linux: ld with -init libdyninstAPI_RT_init
  *           gcc with -Wl,-init -Wl,...
  *    Windows: called from DllMain, which exists in lieu of libdyninstAPI_RT_init
@@ -236,26 +190,15 @@ void DYNINSTBaseInit()
  * This is only called in the Dynamic instrumentation case.  Static
  * libraries don't call this.
  **/
-void DYNINSTinit(int cause, int pid, int maxthreads, int debug_flag)
+void DYNINSTinit()
 {
-   int calledByFork = 0, calledByAttach = 0;
    rtdebug_printf("%s[%d]:  DYNINSTinit:  welcome to DYNINSTinit()\n", __FILE__, __LINE__);
    initFPU();
+   mark_heaps_exec();
 
-   DYNINSTstaticMode = 0;
    tc_lock_init(&DYNINST_trace_lock);
-   DYNINST_mutatorPid = pid;
-   
-   if (isMutatedExec) {
-      fflush(stdout);
-      cause = 9;
-   }
-
-   calledByFork = (cause == 2);
-   calledByAttach = (cause == 3);
+   if(DYNINST_max_num_threads < MAX_THREADS) DYNINST_max_num_threads = MAX_THREADS;
    DYNINSThasInitialized = 1;
-   DYNINST_max_num_threads = maxthreads;
-   DYNINSTdebugRTlib = debug_flag; /* set by mutator on request */
    rtdebug_printf("%s[%d]:  welcome to DYNINSTinit\n", __FILE__, __LINE__);
 
    /* sanity check */
@@ -264,12 +207,7 @@ void DYNINSTinit(int cause, int pid, int maxthreads, int debug_flag)
    
    initTrampGuards(DYNINST_max_num_threads);
 
-   DYNINSTos_init(calledByFork, calledByAttach);
    DYNINST_initialize_index_list();
-
-   DYNINST_bootstrap_info.pid = dyn_pid_self();
-   DYNINST_bootstrap_info.ppid = pid;    
-   DYNINST_bootstrap_info.event = cause;
 
    /* defensive stuff */
    memset(DYNINST_target_cache, 
@@ -308,7 +246,7 @@ void DYNINST_snippetBreakpoint() {
 }
 
 /* Used to instrument (and report) the entry of fork */
-void DYNINST_instForkEntry() {
+DLLEXPORT void DYNINST_instForkEntry() {
    tc_lock_lock(&DYNINST_trace_lock);
 
    /* Set the state so the mutator knows what's up */
@@ -328,7 +266,7 @@ void DYNINST_instForkEntry() {
 /* We use the safe breakpoint on the child side of fork
    as we may not be attached at that point. The parent
    side uses the normal version. */
-void DYNINST_instForkExit(void *arg1) {
+DLLEXPORT void DYNINST_instForkExit(void *arg1) {
    tc_lock_lock(&DYNINST_trace_lock);
 
    /* Set the state so the mutator knows what's up */    
@@ -351,7 +289,7 @@ void DYNINST_instForkExit(void *arg1) {
 
        
 /* Used to instrument (and report) the entry of exec */
-void DYNINST_instExecEntry(void *arg1) {
+DLLEXPORT void DYNINST_instExecEntry(void *arg1) {
    tc_lock_lock(&DYNINST_trace_lock);
 
    /* Set the state so the mutator knows what's up */
@@ -372,7 +310,7 @@ void DYNINST_instExecEntry(void *arg1) {
 
        
 /* Used to instrument (and report) the exit of exec */
-void DYNINST_instExecExit(void *arg1) {
+DLLEXPORT void DYNINST_instExecExit(void *arg1) {
    tc_lock_lock(&DYNINST_trace_lock);
 
    /* Set the state so the mutator knows what's up */
@@ -389,7 +327,7 @@ void DYNINST_instExecExit(void *arg1) {
 
        
 /* Used to instrument (and report) the entry of exit */
-void DYNINST_instExitEntry(void *arg1) {
+DLLEXPORT void DYNINST_instExitEntry(void *arg1) {
    tc_lock_lock(&DYNINST_trace_lock);
 
    /* Set the state so the mutator knows what's up */
@@ -405,7 +343,7 @@ void DYNINST_instExitEntry(void *arg1) {
 }
 
 /* Used to instrument (and report) the entry of exit */
-void DYNINST_instLoadLibrary(void *arg1) {
+DLLEXPORT void DYNINST_instLoadLibrary(void *arg1) {
    tc_lock_lock(&DYNINST_trace_lock);
 
    /* Set the state so the mutator knows what's up */
@@ -421,7 +359,7 @@ void DYNINST_instLoadLibrary(void *arg1) {
 }
 
 /* Used to instrument (and report) the entry of exit */
-void DYNINST_instLwpExit(void) {
+DLLEXPORT void DYNINST_instLwpExit(void) {
    tc_lock_lock(&DYNINST_trace_lock);
 
    /* Set the state so the mutator knows what's up */
@@ -577,8 +515,8 @@ void DYNINST_stopInterProc(void * pointAddr, void *callBackID,
 }
 
 // boundsArray is a sequence of (blockStart,blockEnd) pairs
-RT_Boolean DYNINST_boundsCheck(void **boundsArray_, void *arrayLen_, 
-                               void *writeTarget_)
+DLLEXPORT RT_Boolean DYNINST_boundsCheck(void **boundsArray_, void *arrayLen_, 
+                                         void *writeTarget_)
 {
     RT_Boolean callStopThread = RT_FALSE;
     const unsigned long writeTarget = (unsigned long)writeTarget_;
@@ -623,7 +561,7 @@ RT_Boolean DYNINST_boundsCheck(void **boundsArray_, void *arrayLen_,
 /**
  * Used to report addresses of functions called at dynamic call sites 
  **/     
-int DYNINSTasyncDynFuncCall (void * call_target, void *call_addr) {
+DLLEXPORT int DYNINSTasyncDynFuncCall (void * call_target, void *call_addr) {
     if (DYNINSTstaticMode) return 0;
 
     tc_lock_lock(&DYNINST_trace_lock);
@@ -699,6 +637,7 @@ void dyninst_init_lock(dyninst_lock_t *lock)
 
 void dyninst_free_lock(dyninst_lock_t *lock)
 {
+    (void)lock; /* unused parameter */
 }
 
 int dyninst_lock(dyninst_lock_t *lock)
@@ -757,10 +696,10 @@ char *asyncEventType2str(rtBPatch_asyncEventType t)
   }
 } 
 
-volatile unsigned long dyninstTrapTableUsed;
-volatile unsigned long dyninstTrapTableVersion;
-volatile trapMapping_t *dyninstTrapTable;
-volatile unsigned long dyninstTrapTableIsSorted;
+DLLEXPORT volatile unsigned long dyninstTrapTableUsed;
+DLLEXPORT volatile unsigned long dyninstTrapTableVersion;
+DLLEXPORT volatile trapMapping_t *dyninstTrapTable;
+DLLEXPORT volatile unsigned long dyninstTrapTableIsSorted;
 
 void* dyninstTrapTranslate(void *source, 
                            volatile unsigned long *table_used,
@@ -813,7 +752,6 @@ void* dyninstTrapTranslate(void *source,
       }         
    } while (local_version != *table_version);
 
-   // rtdebug_printf "Mapped %p to %p\n", source, target);
    return target;
 }
 

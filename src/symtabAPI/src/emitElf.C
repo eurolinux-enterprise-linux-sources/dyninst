@@ -41,14 +41,14 @@
 #include "debug.h"
 
 
-#include "common/h/pathName.h"
+#include "common/src/pathName.h"
 
 #if defined(os_freebsd)
-#include "common/h/freebsdKludges.h"
+#include "common/src/freebsdKludges.h"
 #endif
 
 #if defined(os_linux)
-#include "common/h/linuxKludges.h"
+#include "common/src/linuxKludges.h"
 #endif
 
 extern void symtab_log_perror(const char *msg);
@@ -87,6 +87,7 @@ static bool libelfso0Flag;
 static bool libelfso1Flag;
 static int libelfso1version_major;
 static int libelfso1version_minor;
+static bool isStaticBinary = false;
 
 static void setVersion(){
   libelfso0Flag = false;
@@ -161,15 +162,17 @@ unsigned int elfHash(const char *name)
 static int elfSymType(Symbol *sym)
 {
   switch (sym->getType()) {
-  case Symbol::ST_MODULE: return STT_FILE;
-  case Symbol::ST_SECTION: return STT_SECTION;
-  case Symbol::ST_OBJECT: return STT_OBJECT;
-  case Symbol::ST_FUNCTION: return STT_FUNC;
-  case Symbol::ST_TLS: return STT_TLS;
-  case Symbol::ST_NOTYPE : return STT_NOTYPE;
-  case Symbol::ST_UNKNOWN: return sym->getInternalType();
+     case Symbol::ST_MODULE: return STT_FILE;
+     case Symbol::ST_SECTION: return STT_SECTION;
+     case Symbol::ST_OBJECT: return STT_OBJECT;
+     case Symbol::ST_FUNCTION: return STT_FUNC;
+     case Symbol::ST_TLS: return STT_TLS;
+     case Symbol::ST_NOTYPE : return STT_NOTYPE;
+     case Symbol::ST_UNKNOWN: return sym->getInternalType();
+#if defined(STT_GNU_IFUNC)
      case Symbol::ST_INDIRECT: return STT_GNU_IFUNC;
-  default: return STT_SECTION;
+#endif
+     default: return STT_SECTION;
   }
 }
 
@@ -195,30 +198,26 @@ static int elfSymVisibility(Symbol::SymbolVisibility sVisibility)
 }
 
 emitElf::emitElf(Elf_X *oldElfHandle_, bool isStripped_, Object *obj_, void (*err_func)(const char *)) :
-   oldElfHandle(oldElfHandle_), 
-   phdrs_scn(NULL),
-   isStripped(isStripped_), 
-   object(obj_),
-   err_func_(err_func)
+   oldElfHandle(oldElfHandle_), newElf(NULL), oldElf(NULL),
+   newEhdr(NULL), oldEhdr(NULL),
+   newPhdr(NULL), oldPhdr(NULL), phdr_offset(0),
+   textData(NULL), symStrData(NULL), dynStrData(NULL),
+   olddynStrData(NULL), olddynStrSize(0),
+   symTabData(NULL), dynsymData(NULL), dynData(NULL),
+   phdrs_scn(NULL), verneednum(0), verdefnum(0),
+   newSegmentStart(0), firstNewLoadSec(NULL),
+   dataSegEnd(0), dynSegOff(0), dynSegAddr(0),
+   phdrSegOff(0), phdrSegAddr(0), dynSegSize(0),
+   secNameIndex(0), currEndOffset(0), currEndAddress(0),
+   linkedStaticData(NULL), loadSecTotalSize(0),
+   isStripped(isStripped_), library_adjust(0),
+   object(obj_), err_func_(err_func),
+   hasRewrittenTLS(false), TLSExists(false), newTLSData(NULL)
 {
-  firstNewLoadSec = NULL;
-  textData = NULL;
-  symStrData = NULL;
-  symTabData = NULL;
-  dynsymData = NULL;
-  dynStrData = NULL;
-  hashData = NULL;
-  rodata = NULL;
- 
-  linkedStaticData = NULL;
-  hasRewrittenTLS = false;
-  TLSExists = false;
-  newTLSData = NULL;
-   
   oldElf = oldElfHandle->e_elfp();
   curVersionNum = 2;
   setVersion();
- 
+
   //Set variable based on the mechanism to add new load segment
   // 1) createNewPhdr (Total program headers + 1) - default
   //	(a) movePHdrsFirst
@@ -234,6 +233,7 @@ emitElf::emitElf(Elf_X *oldElfHandle_, bool isStripped_, Object *obj_, void (*er
 
   bool isBlueGeneP = obj_->isBlueGeneP();
   bool hasNoteSection = obj_->hasNoteSection();
+  isStaticBinary = obj_->isStaticBinary();
 
   // for now, bluegene is the only system which uses the following mechanism for updating program header
   if(isBlueGeneP){
@@ -718,6 +718,15 @@ bool emitElf::driver(Symtab *obj, string fName){
         renameSection((string)name, newName, false);
     }
 
+    if (isStaticBinary && ((strcmp(name, ".rela.plt") == 0) ||
+			   (strcmp(name, ".rel.plt") == 0))) {
+       string newName = ".o";
+       newName.append(name, 2, strlen(name));
+       renameSection(name, newName, false);
+       // Clear the PLT type; use PROGBITS
+       newshdr->sh_type = SHT_PROGBITS;
+    }
+
     // Change offsets of sections based on the newly added sections
     if(movePHdrsFirst) {
         /* This special case is specific to FreeBSD but there is no hurt in
@@ -781,7 +790,7 @@ bool emitElf::driver(Symtab *obj, string fName){
       if(!createLoadableSections(obj,newshdr, extraAlignSize, 
                                  newNameIndexMapping, sectionNumber))        
          return false;
-      if (createNewPhdr && !movePHdrsFirst) {
+       if (createNewPhdr && !movePHdrsFirst) {
 	 sectionNumber++;
          createNewPhdrRegion(newNameIndexMapping);
 	}
@@ -789,7 +798,10 @@ bool emitElf::driver(Symtab *obj, string fName){
         // Update the heap symbols, now that loadSecTotalSize is set
         updateSymbols(dynsymData, dynStrData, loadSecTotalSize);
     }
-
+    if (newshdr->sh_addralign < newdata->d_align) 
+    {
+      newshdr->sh_addralign = newdata->d_align;
+    }
     if ( 0 > elf_update(newElf, ELF_C_NULL))
     {
        fprintf(stderr, "%s[%d]:  elf_update failed: %d, %s\n", FILE__, __LINE__, elf_errno(), elf_errmsg(elf_errno()));
@@ -1091,14 +1103,18 @@ void emitElf::fixPhdrs(unsigned &extraAlignSize)
 
         if(movePHdrsFirst) {
            if (!old->p_offset) {
-              if (newPhdr->p_vaddr)
+	     if (newPhdr->p_vaddr) 
+	     {
                  newPhdr->p_vaddr = old->p_vaddr - pgSize;
+		 newPhdr->p_align = pgSize;
+	     }
 	      newPhdr->p_paddr = newPhdr->p_vaddr;
 	      newPhdr->p_filesz += pgSize;
 	      newPhdr->p_memsz = newPhdr->p_filesz;
            }
            else {
               newPhdr->p_offset += pgSize;
+	      newPhdr->p_align = pgSize;
            }
            if (newPhdr->p_vaddr) {
               newPhdr->p_vaddr += library_adjust;
@@ -1155,7 +1171,7 @@ void emitElf::fixPhdrs(unsigned &extraAlignSize)
   // libelf from overwriting the program headers data when outputing
   // sections.  Fill in the new section's data with what we just wrote.
   Elf_Data *data = elf_newdata(phdrs_scn);
-  size_t total_size = newEhdr->e_phnum * newEhdr->e_phentsize;
+  size_t total_size = (size_t)newEhdr->e_phnum * (size_t)newEhdr->e_phentsize;
   data->d_buf = malloc(total_size);
   memcpy(data->d_buf, phdr_data, total_size);
   data->d_size = total_size;
@@ -1174,6 +1190,8 @@ void emitElf::fixPhdrs(unsigned &extraAlignSize)
 
 //This method updates the .dynamic section to reflect the changes to the relocation section
 void emitElf::updateDynamic(unsigned tag, Elf32_Addr val){
+  if (isStaticBinary) return;
+
   if(dynamicSecData.find(tag) == dynamicSecData.end()) {
       rewrite_printf("%s[%d]: updateDynamic cannot find tag %d in section data\n",
               FILE__, __LINE__, tag);
@@ -1299,6 +1317,7 @@ bool emitElf::createLoadableSections(Symtab*obj, Elf32_Shdr* &shdr, unsigned &ex
            break;
         case Region::RT_BSS:
            newshdr->sh_type = SHT_NOBITS;
+           //FALLTHROUGH
         case Region::RT_DATA:
            newshdr->sh_flags = SHF_WRITE | SHF_ALLOC;
            break;
@@ -1530,6 +1549,11 @@ bool emitElf::createLoadableSections(Symtab*obj, Elf32_Shdr* &shdr, unsigned &ex
         newdata64->d_size = newSecs[i]->getDiskSize();
         if (!newdata64->d_align)
            newdata64->d_align = newshdr->sh_addralign;
+	if(newshdr->sh_addralign < newdata64->d_align) 
+	{
+	  newshdr->sh_addralign = newdata64->d_align;
+	}
+	
         newshdr->sh_size = newdata64->d_size;
         memcpy(newdata, newdata64, sizeof(Elf_Data));
      }
@@ -1541,6 +1565,10 @@ bool emitElf::createLoadableSections(Symtab*obj, Elf32_Shdr* &shdr, unsigned &ex
         newdata->d_size = newSecs[i]->getDiskSize();
         if (!newdata->d_align)
            newdata->d_align = newshdr->sh_addralign;
+	if(newshdr->sh_addralign < newdata->d_align) 
+	{
+	  newshdr->sh_addralign = newdata->d_align;
+	}
         newshdr->sh_size = newdata->d_size;
      }
 
@@ -1874,6 +1902,49 @@ bool emitElf::createSymbolTables(Symtab *obj, vector<Symbol *>&allSymbols)
     versionSymTable.push_back(0);
   }	  
 
+ 
+  if (obj->isStaticBinary()) {
+      // Static binary case
+      vector<Region *> newRegs;
+      obj->getAllNewRegions(newRegs);
+      if( newRegs.size() ) {
+          emitElfStatic linker(obj->getAddressWidth(), isStripped);
+
+          emitElfStatic::StaticLinkError err;
+          std::string errMsg;
+          linkedStaticData = linker.linkStatic(obj, err, errMsg);
+          if ( !linkedStaticData ) {
+               std::string linkStaticError = 
+                   std::string("Failed to link to static library code into the binary: ") +
+                   emitElfStatic::printStaticLinkError(err) + std::string(" = ")
+                   + errMsg;
+               setSymtabError(Emit_Error);
+               symtab_log_perror(linkStaticError.c_str());
+               return false;
+          }
+
+          hasRewrittenTLS = linker.hasRewrittenTLS();
+
+          // Find the end of the new Regions
+          obj->getAllNewRegions(newRegs);
+
+          Offset lastRegionAddr = 0, lastRegionSize = 0;
+          vector<Region *>::iterator newRegIter;
+          for(newRegIter = newRegs.begin(); newRegIter != newRegs.end();
+              ++newRegIter)
+          {
+              if( (*newRegIter)->getDiskOffset() > lastRegionAddr ) {
+                  lastRegionAddr = (*newRegIter)->getDiskOffset();
+                  lastRegionSize = (*newRegIter)->getDiskSize();
+              }
+          }
+
+          if( !emitElfUtils::updateHeapVariables(obj, lastRegionAddr + lastRegionSize) ) {
+              return false;
+          }
+      }
+  }
+
   for(i=0; i<allSymbols.size();i++) {
     if(allSymbols[i]->isInSymtab()) {
       allSymSymbols.push_back(allSymbols[i]);
@@ -2115,48 +2186,6 @@ bool emitElf::createSymbolTables(Symtab *obj, vector<Symbol *>&allSymbols)
     //add .dynamic section
     if(dynsecSize)
       obj->addRegion(0, dynsecData, dynsecSize*sizeof(Elf64_Dyn), ".dynamic", Region::RT_DYNAMIC, true);
-  }else{
-      // Static binary case
-      vector<Region *> newRegs;
-      obj->getAllNewRegions(newRegs);
-      if( newRegs.size() ) {
-          // Link in all new libraries
-          emitElfStatic linker(obj->getAddressWidth(), isStripped);
-
-          emitElfStatic::StaticLinkError err;
-          std::string errMsg;
-          linkedStaticData = linker.linkStatic(obj, err, errMsg);
-          if ( !linkedStaticData ) {
-               std::string linkStaticError = 
-                   std::string("Failed to link to static library code into the binary: ") +
-                   emitElfStatic::printStaticLinkError(err) + std::string(" = ")
-                   + errMsg;
-               setSymtabError(Emit_Error);
-               symtab_log_perror(linkStaticError.c_str());
-               return false;
-          }
-
-          hasRewrittenTLS = linker.hasRewrittenTLS();
-
-          // Find the end of the new Regions
-          obj->getAllNewRegions(newRegs);
-
-          Offset lastRegionAddr = 0, lastRegionSize = 0;
-          vector<Region *>::iterator newRegIter;
-          for(newRegIter = newRegs.begin(); newRegIter != newRegs.end();
-              ++newRegIter)
-          {
-              if( (*newRegIter)->getDiskOffset() > lastRegionAddr ) {
-                  lastRegionAddr = (*newRegIter)->getDiskOffset();
-                  // FIXME: this was memSize, but seems like it should be diskSize
-                  lastRegionSize = (*newRegIter)->getDiskSize();
-              }
-          }
-
-          if( !emitElfUtils::updateHeapVariables(obj, lastRegionAddr + lastRegionSize) ) {
-              return false;
-          }
-      }
   }
 
   if(!obj->getAllNewRegions(newSecs))
@@ -2323,7 +2352,12 @@ void emitElf::createRelocationSections(Symtab *obj, std::vector<relocationEntry>
       dsize_type = DT_PLTRELSZ;
       buffer = relas;
    }
-   
+
+   if (buffer == NULL) {
+      log_elferror(err_func_, "Unknown relocation type encountered");
+      return;
+   }
+
    /* The original binary may have overlapping rel.dyn and rel.plt section. The overlap is determined
       by the size given by the dynamic entry DT_RELSZ/DT_RELASZ. We try to reproduce similar overlap
       in the rewritten binary to keep the loader happy. We add new entries to the end of the original 

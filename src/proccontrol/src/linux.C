@@ -41,10 +41,10 @@
 #include <time.h>
 #include <iostream>
 
-#include "dynutil/h/dyn_regs.h"
-#include "dynutil/h/dyntypes.h"
+#include "common/h/dyn_regs.h"
+#include "common/h/dyntypes.h"
 
-#include "common/h/pathName.h"
+#include "common/src/pathName.h"
 #include "proccontrol/h/PCErrors.h"
 #include "proccontrol/h/Generator.h"
 #include "proccontrol/h/Event.h"
@@ -62,12 +62,25 @@
 
 #include "proccontrol/src/snippets.h"
 
-#include "common/h/linuxKludges.h"
-#include "common/h/parseauxv.h"
+#include "common/src/linuxKludges.h"
+#include "common/src/parseauxv.h"
+
+// Before glibc-2.7, sys/ptrace.h lacked PTRACE_O_* and PTRACE_EVENT_*, so we
+// need them from linux/ptrace.h.  (Conditionally, as later glibc conflicts.)
+#if !__GLIBC_PREREQ(2,7)
+#include <linux/ptrace.h>
+#endif
 
 using namespace Dyninst;
 using namespace ProcControlAPI;
+
+#if defined(WITH_SYMLITE)
 #include "symlite/h/SymLite-elf.h"
+#elif defined(WITH_SYMTAB_API)
+#include "symtabAPI/h/SymtabReader.h"
+#else
+#error "No defined symbol reader"
+#endif
 
 #if !defined(PTRACE_GETREGS) && defined(PPC_PTRACE_GETREGS)
 #define PTRACE_GETREGS PPC_PTRACE_GETREGS
@@ -97,6 +110,16 @@ Generator *Generator::getDefaultGenerator()
 
 bool GeneratorLinux::initialize()
 {
+   int result;
+   
+   sigset_t usr2_set;
+   sigemptyset(&usr2_set);
+   sigaddset(&usr2_set, SIGUSR2);
+   result = pthread_sigmask(SIG_UNBLOCK, &usr2_set, NULL);
+   if (result != 0) {
+      perr_printf("Unable to unblock SIGUSR2: %s\n", strerror(result));
+   }
+   
    generator_lwp = P_gettid();
    generator_pid = P_getpid();
    return true;
@@ -149,7 +172,7 @@ ArchEvent *GeneratorLinux::getEvent(bool block)
       else 
          pthrd_printf("Unable to interpret waitpid return.\n");
    }
-
+   
    newevent = new ArchEventLinux(pid, status);
    return newevent;
 }
@@ -278,6 +301,47 @@ bool DecoderLinux::decode(ArchEvent *ae, std::vector<Event::ptr> &events)
       pthrd_printf("Decoded to signal %d\n", stopsig);
       switch (stopsig)
       {
+         case (SIGTRAP | 0x80): //PTRACE_O_TRACESYSGOOD
+            if (!proc || !thread) {
+                //Legacy event on old process?
+                return true;
+            }
+            pthrd_printf("Decoded event to syscall-stop on %d/%d\n",
+                  proc->getPid(), thread->getLWP());
+            if (lthread->hasPostponedSyscallEvent()) {
+               delete archevent;
+               archevent = lthread->getPostponedSyscallEvent();
+               ext = archevent->event_ext;
+               switch (ext) {
+                  case PTRACE_EVENT_FORK:
+                  case PTRACE_EVENT_CLONE:
+                     pthrd_printf("Resuming %s event after syscall exit on %d/%d\n",
+                                  ext == PTRACE_EVENT_FORK ? "fork" : "clone",
+                                  proc->getPid(), thread->getLWP());
+                     if (!archevent->findPairedEvent(parent, child)) {
+                        pthrd_printf("Parent half of paired event, postponing decode "
+                                     "until child arrives\n");
+                        archevent->postponePairedEvent();
+                        return true;
+                     }
+                     break;
+                  case PTRACE_EVENT_EXEC:
+                     pthrd_printf("Resuming exec event after syscall exit on %d/%d\n",
+                                  proc->getPid(), thread->getLWP());
+                     event = Event::ptr(new EventExec(EventType::Post));
+                     event->setSyncType(Event::sync_process);
+                     break;
+               }
+               break;
+            }
+	    // If we're expecting syscall events other than postponed ones, fall through the rest of
+	    // the event handling
+	    if(!thread->syscallMode())
+	    {
+	      perr_printf("Received an unexpected syscall TRAP\n");
+	      return false;
+	    }
+	    
          case SIGSTOP:
             if (!proc) {               
                //The child half of an event pair.  Find the parent or postpone it.
@@ -318,6 +382,7 @@ bool DecoderLinux::decode(ArchEvent *ae, std::vector<Event::ptr> &events)
 #endif
             ext = status >> 16;
             if (ext) {
+               bool postpone = false;
                switch (ext) {
                   case PTRACE_EVENT_EXIT:
                      if (!proc || !thread) {
@@ -327,7 +392,21 @@ bool DecoderLinux::decode(ArchEvent *ae, std::vector<Event::ptr> &events)
                      pthrd_printf("Decoded event to pre-exit on %d/%d\n",
                                   proc->getPid(), thread->getLWP());
                      if (thread->getLWP() == proc->getPid())
-                        event = Event::ptr(new EventExit(EventType::Pre, 0));
+		     {
+		       unsigned long exitcode = 0x0;
+		       int result = do_ptrace((pt_req)PTRACE_GETEVENTMSG, (pid_t) thread->getLWP(),
+					      NULL, &exitcode);
+		       if(result == -1) 
+		       {
+			 perr_printf("Error getting event message from exit\n");
+			 return false;
+		       }
+		       exitcode = WEXITSTATUS(exitcode);
+		       
+		       pthrd_printf("Decoded event to pre-exit of process %d/%d with code %lu\n",
+				      proc->getPid(), thread->getLWP(), exitcode);
+		       event = Event::ptr(new EventExit(EventType::Pre, exitcode));
+		     } 
                      else {
                         EventLWPDestroy::ptr lwp_ev = EventLWPDestroy::ptr(new EventLWPDestroy(EventType::Pre));
                         event = lwp_ev;
@@ -338,13 +417,13 @@ bool DecoderLinux::decode(ArchEvent *ae, std::vector<Event::ptr> &events)
                      break;
                   case PTRACE_EVENT_FORK: 
                   case PTRACE_EVENT_CLONE: {
-                     pthrd_printf("Decoded event to %s on %d/%d\n",
-                                  ext == PTRACE_EVENT_FORK ? "fork" : "clone",
-                                  proc->getPid(), thread->getLWP());
                      if (!proc || !thread) {
                         //Legacy event on old process. 
                         return true;
                      }
+                     pthrd_printf("Decoded event to %s on %d/%d\n",
+                                  ext == PTRACE_EVENT_FORK ? "fork" : "clone",
+                                  proc->getPid(), thread->getLWP());
                      unsigned long cpid_l = 0x0;
                      int result = do_ptrace((pt_req) PTRACE_GETEVENTMSG, (pid_t) thread->getLWP(), 
                                             NULL, &cpid_l);
@@ -354,26 +433,27 @@ bool DecoderLinux::decode(ArchEvent *ae, std::vector<Event::ptr> &events)
                      }
                      pid_t cpid = (pid_t) cpid_l;                     
                      archevent->child_pid = cpid;
-                     archevent->event_ext = ext;
-                     if (!archevent->findPairedEvent(parent, child)) {
-                        pthrd_printf("Parent half of paired event, postponing decode "
-                                     "until child arrives\n");
-                        archevent->postponePairedEvent();
-                        return true;
-                     }
+                     postpone = true;
                      break;
                   }
                   case PTRACE_EVENT_EXEC: {
-                     pthrd_printf("Decoded event to exec on %d/%d\n",
-                                  proc->getPid(), thread->getLWP());
                      if (!proc || !thread) {
                         //Legacy event on old process. 
                         return true;
                      }
-                     event = Event::ptr(new EventExec(EventType::Post));
-                     event->setSyncType(Event::sync_process);
+                     pthrd_printf("Decoded event to exec on %d/%d\n",
+                                  proc->getPid(), thread->getLWP());
+                     postpone = true;
                      break;
                   }
+               }
+               if (postpone) {
+                  pthrd_printf("Postponing event until syscall exit on %d/%d\n",
+                               proc->getPid(), thread->getLWP());
+                  archevent->event_ext = ext;
+                  event = Event::ptr(new EventPostponedSyscall());
+                  lthread->postponeSyscallEvent(archevent);
+                  archevent = NULL;
                }
                break;
             }
@@ -398,7 +478,6 @@ bool DecoderLinux::decode(ArchEvent *ae, std::vector<Event::ptr> &events)
                event = Event::ptr(new EventRPC(thread->runningRPC()->getWrapperForDecode()));
                break;
             }
-
             bp_instance *clearingbp = thread->isClearingBreakpoint();
             if (thread->singleStep() && clearingbp) {
                 pthrd_printf("Decoded event to breakpoint restore\n");
@@ -424,6 +503,20 @@ bool DecoderLinux::decode(ArchEvent *ae, std::vector<Event::ptr> &events)
                        proc->getPid(), thread->getLWP());
                event = Event::ptr(new EventSingleStep());
                break;
+            }
+
+            if (thread->syscallMode() && !ibp) {
+                if (thread->preSyscall()) {
+                    pthrd_printf("Decoded event to pre-syscall on %d/%d\n",
+                            proc->getPid(), thread->getLWP());
+                    event = Event::ptr(new EventPreSyscall());
+                    break; 
+                } else {
+                    pthrd_printf("Decoded event to post-syscall on %d/%d\n",
+                            proc->getPid(), thread->getLWP());
+                    event = Event::ptr(new EventPostSyscall());
+                    break;
+                }
             }
             
             if (ibp && ibp != clearingbp) {
@@ -658,7 +751,7 @@ int linux_process::computeAddrWidth(Dyninst::Architecture me)
 
    // We want to check the highest 4 bytes of each integer
    // On big-endian systems, these come first in memory
-   int start_index;
+   int start_index = 0;
    switch (me) {
       case Arch_x86:
       case Arch_x86_64:
@@ -671,6 +764,7 @@ int linux_process::computeAddrWidth(Dyninst::Architecture me)
       case Arch_none:
       default:
          assert(0);
+	 return 0;
    }
 
    for (long int i=start_index; i<words_read; i+= 4)
@@ -687,34 +781,36 @@ int linux_process::computeAddrWidth(Dyninst::Architecture me)
 linux_process::linux_process(Dyninst::PID p, std::string e, std::vector<std::string> a, 
                              std::vector<std::string> envp,  std::map<int,int> f) :
    int_process(p, e, a, envp, f),
+   resp_process(p, e, a, envp, f),
    sysv_process(p, e, a, envp, f),
    unix_process(p, e, a, envp, f),
    thread_db_process(p, e, a, envp, f),
    indep_lwp_control_process(p, e, a, envp, f),
    mmap_alloc_process(p, e, a, envp, f),
-   fork_tracker(NULL),
-   lwp_tracker(NULL)
+   int_followFork(p, e, a, envp, f),
+   int_signalMask(p, e, a, envp, f),
+   int_LWPTracking(p, e, a, envp, f),
+   int_memUsage(p, e, a, envp, f)
 {
 }
 
 linux_process::linux_process(Dyninst::PID pid_, int_process *p) :
    int_process(pid_, p),
+   resp_process(pid_, p),
    sysv_process(pid_, p),
    unix_process(pid_, p),
    thread_db_process(pid_, p),
    indep_lwp_control_process(pid_, p),
    mmap_alloc_process(pid_, p),
-   fork_tracker(NULL),
-   lwp_tracker(NULL)
+   int_followFork(pid_, p),
+   int_signalMask(pid_, p),
+   int_LWPTracking(pid_, p),
+   int_memUsage(pid_, p)
 {
 }
 
 linux_process::~linux_process()
 {
-   if (fork_tracker) {
-      delete fork_tracker;
-      fork_tracker = NULL;
-   }
 }
 
 bool linux_process::plat_create()
@@ -936,6 +1032,7 @@ bool linux_process::plat_writeMem(int_thread *thr, const void *local,
 linux_x86_process::linux_x86_process(Dyninst::PID p, std::string e, std::vector<std::string> a, 
                                      std::vector<std::string> envp, std::map<int,int> f) :
    int_process(p, e, a, envp, f),
+   resp_process(p, e, a, envp, f),
    linux_process(p, e, a, envp, f),
    x86_process(p, e, a, envp, f)
 {
@@ -943,6 +1040,7 @@ linux_x86_process::linux_x86_process(Dyninst::PID p, std::string e, std::vector<
 
 linux_x86_process::linux_x86_process(Dyninst::PID pid_, int_process *p) :
    int_process(pid_, p),
+   resp_process(pid_, p),
    linux_process(pid_, p),
    x86_process(pid_, p)
 {
@@ -971,6 +1069,7 @@ bool linux_x86_process::plat_supportHWBreakpoint()
 linux_ppc_process::linux_ppc_process(Dyninst::PID p, std::string e, std::vector<std::string> a, 
                                      std::vector<std::string> envp, std::map<int,int> f) :
    int_process(p, e, a, envp, f),
+   resp_process(p, e, a, envp, f),
    linux_process(p, e, a, envp, f),
    ppc_process(p, e, a, envp, f)
 {
@@ -978,6 +1077,7 @@ linux_ppc_process::linux_ppc_process(Dyninst::PID p, std::string e, std::vector<
 
 linux_ppc_process::linux_ppc_process(Dyninst::PID pid_, int_process *p) :
    int_process(pid_, p),
+   resp_process(pid_, p),
    linux_process(pid_, p),
    ppc_process(pid_, p)
 {
@@ -1076,6 +1176,7 @@ bool linux_process::plat_needsAsyncIO() const
       fake_async_thread = new DThread();
       bool result = fake_async_thread->spawn(linux_thread::fake_async_main, NULL);
       assert(result);
+      if(!result) return false;
    }
    return true;
 }
@@ -1131,6 +1232,25 @@ bool linux_process::plat_supportLWPPostDestroy()
    return true;
 }
 
+void linux_thread::postponeSyscallEvent(ArchEventLinux *event)
+{
+   assert(!postponed_syscall_event);
+   postponed_syscall_event = event;
+}
+
+bool linux_thread::hasPostponedSyscallEvent()
+{
+   return postponed_syscall_event != NULL;
+}
+
+ArchEventLinux *linux_thread::getPostponedSyscallEvent()
+{
+   ArchEventLinux *ret = postponed_syscall_event;
+   postponed_syscall_event = NULL;
+   return ret;
+}
+
+
 bool linux_thread::plat_cont()
 {
    pthrd_printf("Continuing thread %d\n", lwp);
@@ -1170,16 +1290,26 @@ bool linux_thread::plat_cont()
    //
    
    int tmpSignal = continueSig_;
-   if( hasPendingStop() ) {
+   if( hasPendingStop()) {
        tmpSignal = 0;
    }
 
-   void *data = (tmpSignal == 0) ? NULL : (void *) tmpSignal;
+   void *data = (tmpSignal == 0) ? NULL : (void *) (long) tmpSignal;
    int result;
-   if (singleStep())
+   if (hasPostponedSyscallEvent())
+   {
+      pthrd_printf("Calling PTRACE_SYSCALL on %d with signal %d\n", lwp, tmpSignal);
+      result = do_ptrace((pt_req) PTRACE_SYSCALL, lwp, NULL, data);
+   }
+   else if (singleStep())
    {
       pthrd_printf("Calling PTRACE_SINGLESTEP on %d with signal %d\n", lwp, tmpSignal);
       result = do_ptrace((pt_req) PTRACE_SINGLESTEP, lwp, NULL, data);
+   }
+   else if (syscallMode())
+   {
+        pthrd_printf("Calling PTRACE_SYSCALL on %d with signal %d\n", lwp, tmpSignal);
+        result = do_ptrace((pt_req) PTRACE_SYSCALL, lwp, NULL, data);
    }
    else 
    {
@@ -1204,12 +1334,18 @@ bool linux_thread::plat_cont()
 
 SymbolReaderFactory *getElfReader()
 {
+#if defined(WITH_SYMLITE)
   static SymbolReaderFactory *symreader_factory = NULL;
   if (symreader_factory)
     return symreader_factory;
 
   symreader_factory = (SymbolReaderFactory *) new SymElfFactory();
   return symreader_factory;
+#elif defined(WITH_SYMTAB_API)
+  return SymtabAPI::getSymtabReaderFactory();
+#else
+#error "No defined symbol reader"
+#endif
 }
 
 SymbolReaderFactory *linux_process::plat_defaultSymReader()
@@ -1274,12 +1410,14 @@ int_thread *int_thread::createThreadPlat(int_process *proc,
 
 linux_thread::linux_thread(int_process *p, Dyninst::THR_ID t, Dyninst::LWP l) :
    int_thread(p, t, l),
-   thread_db_thread(p, t, l)
+   thread_db_thread(p, t, l),
+   postponed_syscall_event(NULL)
 {
 }
 
 linux_thread::~linux_thread()
 {
+   delete postponed_syscall_event;
 }
 
 bool linux_thread::plat_stop()
@@ -1308,9 +1446,10 @@ void linux_thread::setOptions()
    long options = 0;
    options |= PTRACE_O_TRACEEXIT;
    options |= PTRACE_O_TRACEEXEC;
-   if (llproc()->lwp_getTracking())
+   options |= PTRACE_O_TRACESYSGOOD;
+   if (llproc()->getLWPTracking()->lwp_getTracking())
       options |= PTRACE_O_TRACECLONE;
-   if (llproc()->fork_isTracking() != FollowFork::ImmediateDetach)
+   if (llproc()->getFollowFork()->fork_isTracking() != FollowFork::ImmediateDetach)
       options |= PTRACE_O_TRACEFORK;
 
    if (options) {
@@ -1405,9 +1544,11 @@ bool linux_process::preTerminate() {
          threw_event = true;
       }
       bool exited = false;
+      auto pid = getPid();
       int_process::waitAndHandleForProc(true, this, exited);
       if (exited) {
-         perr_printf("Process %d exited during terminate handling.  Is this irony?\n", getPid());
+         // Note, can't even call getPid() anymore, since 'this' is ironically deleted.
+         perr_printf("Process %d exited during terminate handling.  Is this irony?\n", pid);
          return false;
       }
    }
@@ -1517,23 +1658,8 @@ bool linux_process::fork_setTracking(FollowFork::follow_t f)
    return true;
 }
 
-FollowFork *linux_process::getForkTracking()
-{
-   if (!fork_tracker) {
-      fork_tracker = new FollowFork(proc());
-   }
-   return fork_tracker;
-}
-
 FollowFork::follow_t linux_process::fork_isTracking() {
    return fork_tracking;
-}
-
-LWPTracking *linux_process::getLWPTracking() {
-   if (!lwp_tracker) {
-      lwp_tracker = new LWPTracking(proc());
-   }
-   return lwp_tracker;
 }
 
 bool linux_process::plat_lwpChangeTracking(bool) {
@@ -1553,6 +1679,79 @@ bool linux_process::plat_lwpChangeTracking(bool) {
    return true;
 }
 
+bool linux_process::allowSignal(int signal_no) {
+   dyn_sigset_t mask = getSigMask();
+   return sigismember(&mask, signal_no);
+}
+
+bool linux_process::readStatM(unsigned long &stk, unsigned long &heap, unsigned long &shrd)
+{
+   char path[64];
+   snprintf(path, 64, "/proc/%d/statm", getPid());
+   path[63] = '\0';
+   
+   unsigned long size, resident, shared, text, lib, data, dt;
+   FILE *f = fopen(path, "r");
+   if (!f) {
+      perr_printf("Could not open %s: %s\n", path, strerror(errno));
+      setLastError(err_internal, "Could not access /proc");
+      return false;
+   }
+   fscanf(f, "%lu %lu %lu %lu %lu %lu %lu", &size, &resident, &shared, 
+          &text, &lib, &data, &dt);
+   fclose(f);
+   unsigned long page_size = getpagesize();
+
+   stk = 0;
+   shrd = (shared + text) * page_size;
+   heap = data * page_size;
+   return true;
+}
+
+bool linux_process::plat_getStackUsage(MemUsageResp_t *resp)
+{
+   unsigned long stk, heap, shrd;
+   bool result = readStatM(stk, heap, shrd);
+   if (!result) 
+      return false;
+   *resp->get() = stk;
+   resp->done();
+   return true;
+}
+
+bool linux_process::plat_getHeapUsage(MemUsageResp_t *resp)
+{
+   unsigned long stk, heap, shrd;
+   bool result = readStatM(stk, heap, shrd);
+   if (!result) 
+      return false;
+   *resp->get() = heap;
+   resp->done();
+   return true;
+}
+
+bool linux_process::plat_getSharedUsage(MemUsageResp_t *resp)
+{
+   unsigned long stk, heap, shrd;
+   bool result = readStatM(stk, heap, shrd);
+   if (!result) 
+      return false;
+   *resp->get() = shrd;
+   resp->done();
+   return true;
+}
+
+bool linux_process::plat_residentNeedsMemVals()
+{
+   return false;
+}
+
+bool linux_process::plat_getResidentUsage(unsigned long, unsigned long, unsigned long,
+                           MemUsageResp_t *)
+{
+   return false;
+}
+
 #if !defined(OFFSETOF)
 #define OFFSETOF(STR, FLD) (unsigned long) (&(((STR *) 0x0)->FLD))
 #endif
@@ -1561,7 +1760,7 @@ dynreg_to_user_t dynreg_to_user;
 static void init_dynreg_to_user()
 {
    static volatile bool initialized = false;
-   static Mutex init_lock;
+   static Mutex<> init_lock;
    if (initialized)
       return;
       
@@ -1884,7 +2083,7 @@ bool linux_thread::plat_getAllRegisters(int_registerPool &regpool)
          const MachRegister reg = i->first;
          if (reg.getArchitecture() != curplat)
             continue;
-         long result = do_ptrace((pt_req) PTRACE_PEEKUSER, lwp, (void *) i->second.first, NULL);
+         long result = do_ptrace((pt_req) PTRACE_PEEKUSER, lwp, (void *) (unsigned long) i->second.first, NULL);
          if (errno == -1) {
             perr_printf("Error reading registers from %d at %x\n", lwp, i->second.first);
             setLastError(err_internal, "Could not read user area from thread");
@@ -1908,12 +2107,14 @@ bool linux_thread::plat_getAllRegisters(int_registerPool &regpool)
    // for a new platform.
    assert(sentinel1 == 0xfeedface);
    assert(sentinel2 == 0xfeedface);
+   if(sentinel1 != 0xfeedface || sentinel2 != 0xfeedface) return false;
+   
 
    regpool.regs.clear();
    for (i = dynreg_to_user.begin(); i != dynreg_to_user.end(); i++)
    {
       const MachRegister reg = i->first;
-      MachRegisterVal val;
+      MachRegisterVal val = 0;
       if (reg.getArchitecture() != curplat)
          continue;
       const unsigned int offset = i->second.first;
@@ -1969,8 +2170,10 @@ bool linux_thread::plat_getRegister(Dyninst::MachRegister reg, Dyninst::MachRegi
    const unsigned offset = i->second.first;
    const unsigned size = i->second.second;
    assert(sizeof(val) >= size);
+   if(sizeof(val) < size) return false;
+   
    val = 0;
-   unsigned long result = do_ptrace((pt_req) PTRACE_PEEKUSR, lwp, (void *) offset, NULL);
+   unsigned long result = do_ptrace((pt_req) PTRACE_PEEKUSER, lwp, (void *) (unsigned long) offset, NULL);
    if (errno != 0) {
       perr_printf("Error reading registers from %d: %s\n", lwp, strerror(errno));
       setLastError(err_internal, "Could not read register from thread");
@@ -2050,14 +2253,14 @@ bool linux_thread::plat_setAllRegisters(int_registerPool &regpool)
             continue;
          
          int result;
+         uintptr_t res;
          if (Dyninst::getArchAddressWidth(curplat) == 4) {
-            uint32_t res = (uint32_t) i->second;
-            result = do_ptrace((pt_req) PTRACE_POKEUSER, lwp, (void *) di->second.first, (void *) res);
+            res = (uint32_t) i->second;
          }
          else {
-            uint64_t res = (uint64_t) i->second;
-            result = do_ptrace((pt_req) PTRACE_POKEUSER, lwp, (void *) di->second.first, (void *) res);
+            res = (uint64_t) i->second;
          }
+         result = do_ptrace((pt_req) PTRACE_POKEUSER, lwp, (void *) (unsigned long) di->second.first, (void *) res);
          
          if (result != 0) {
             int error = errno;
@@ -2110,6 +2313,7 @@ bool linux_thread::plat_convertToSystemRegs(const int_registerPool &regpool, uns
                break;
             default:
                assert(0);
+	       return false;
          }
 
          if (!is_gpr) {
@@ -2182,17 +2386,19 @@ bool linux_thread::plat_setRegister(Dyninst::MachRegister reg, Dyninst::MachRegi
    const unsigned int offset = i->second.first;
    const unsigned int size = i->second.second;
    int result;
+   uintptr_t value;
    if (size == 4) {
-      uint32_t value = (uint32_t) val;
-      result = do_ptrace((pt_req) PTRACE_POKEUSR, lwp, (void *) offset, (void *) value);
+      value = (uint32_t) val;
    }
    else if (size == 8) {
-      uint64_t value = (uint64_t) val;
-      result = do_ptrace((pt_req) PTRACE_POKEUSR, lwp, (void *) offset, (void *) value);
+      value = (uint64_t) val;
    }
    else {
       assert(0);
+      return false;
+      
    }
+   result = do_ptrace((pt_req) PTRACE_POKEUSER, lwp, (void *) (uintptr_t)offset, (void *) value);
    pthrd_printf("Set register %s (size %u, offset %u) to value %lx\n", reg.name().c_str(), size, offset, val);
    if (result != 0) {
       int error = errno;
@@ -2304,7 +2510,7 @@ bool linux_thread::thrdb_getThreadArea(int val, Dyninst::Address &addr)
    switch (arch) {
       case Arch_x86: {
          uint32_t addrv[4];
-         int result = do_ptrace((pt_req) PTRACE_GET_THREAD_AREA, lwp, (void *) val, &addrv);
+         int result = do_ptrace((pt_req) PTRACE_GET_THREAD_AREA, lwp, (void *) (intptr_t)val, &addrv);
          if (result != 0) {
             int error = errno;
             perr_printf("Error doing PTRACE_GET_THREAD_AREA on %d/%d: %s\n", llproc()->getPid(), lwp, strerror(error));
@@ -2315,7 +2521,7 @@ bool linux_thread::thrdb_getThreadArea(int val, Dyninst::Address &addr)
          break;
       }
       case Arch_x86_64: {
-         int op;
+         intptr_t op;
          if (val == FS_REG_NUM)
             op = ARCH_GET_FS;
          else if (val == GS_REG_NUM)
@@ -2443,7 +2649,8 @@ ArchEventLinux::ArchEventLinux(pid_t p, int s) :
    pid(p), 
    interrupted(false), 
    error(0),
-   child_pid(NULL_PID)
+   child_pid(NULL_PID),
+   event_ext(0)
 {
 }
 
@@ -2452,7 +2659,8 @@ ArchEventLinux::ArchEventLinux(int e) :
    pid(NULL_PID),
    interrupted(false),
    error(e),
-   child_pid(NULL_PID)
+   child_pid(NULL_PID),
+   event_ext(0)
 {
 }
       
@@ -2473,9 +2681,12 @@ bool ArchEventLinux::findPairedEvent(ArchEventLinux* &parent, ArchEventLinux* &c
       //'this' event  is a child, search list for a parent
       is_parent = false;
    }
-   else
+   else 
+   {
       assert(0);
-
+      return false;
+   }
+   
    vector<ArchEventLinux *>::iterator i;
    for (i = pending_events.begin(); i != pending_events.end(); i++) {
       parent = is_parent ? this : *i;
@@ -2649,8 +2860,12 @@ LinuxPtrace::LinuxPtrace() :
    pid(0),
    addr(NULL),
    data(NULL),
+   proc(NULL),
+   remote_addr(0),
    size(0),
-   ret(0)
+   ret(0),
+   bret(false),
+   err(0)
 {
 }
 

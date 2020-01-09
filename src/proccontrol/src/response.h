@@ -32,7 +32,7 @@
 #define RESPONSE_H_
 
 #include "proccontrol/h/Event.h"
-#include "common/h/dthread.h"
+#include "common/src/dthread.h"
 #include <map>
 #include <vector>
 
@@ -51,6 +51,8 @@ class response : public boost::enable_shared_from_this<response> {
    friend void boost::checked_delete<response>(response *);
    friend void boost::checked_delete<const response>(const response *);
    friend class responses_pending;
+   friend unsigned newResponseID();
+   friend unsigned newResponseID(unsigned);   
   protected:
    Dyninst::ProcControlAPI::Event::ptr event;
 
@@ -138,7 +140,7 @@ class response : public boost::enable_shared_from_this<response> {
 class responses_pending {
   private:
    std::map<unsigned int, response::ptr> pending;
-   CondVar cvar;
+   CondVar<Mutex <false> > cvar;
 
   public:
    response::ptr rmResponse(unsigned int id);
@@ -148,7 +150,7 @@ class responses_pending {
    void noteResponse();
    bool hasAsyncPending(bool ev_only = true);
 
-   CondVar &condvar();
+   CondVar<Mutex <false> > &condvar();
    void lock();
    void unlock();
    void signal();
@@ -317,7 +319,7 @@ class ResponseSet {
   std::map<unsigned, unsigned> ids;
   unsigned myid;
   static unsigned next_id;
-  static Mutex id_lock;
+  static Mutex<false> id_lock;
   static std::map<unsigned, ResponseSet *> all_respsets;
  public:
   ResponseSet();
@@ -326,5 +328,8 @@ class ResponseSet {
   unsigned getIDByIndex(unsigned int index, bool &found) const;
   static ResponseSet *getResponseSetByID(unsigned);
 };
+
+unsigned newResponseID();
+unsigned newResponseID(unsigned size);
 
 #endif

@@ -66,6 +66,7 @@ Parser::Parser(CodeObject & obj, CFGFactory & fact, ParseCallbackManager & pcb) 
     _cfgfact(fact),
     _pcb(pcb),
     _parse_data(NULL),
+    num_delayedFrames(0),
     _sink(NULL),
     _parse_state(UNPARSED),
     _in_parse(false),
@@ -94,9 +95,6 @@ Parser::Parser(CodeObject & obj, CFGFactory & fact, ParseCallbackManager & pcb) 
 
     // allocate a sink block -- region is arbitrary
     _sink = _cfgfact._mksink(&_obj,copy[0]);
-
-    // initialize variable for tracking delayed frames
-    num_delayedFrames = 0;
 
     bool overlap = false;
     CodeRegion * prev = copy[0], *cur = NULL;
@@ -652,7 +650,7 @@ Parser::finalize(Function *f)
     assert(rd);
 
     // finish delayed parsing and sorting
-    vector<Block*> const& blocks = f->blocks_int();
+    Function::blocklist blocks = f->blocks_int();
 
     // is this the first time we've parsed this function?
     if (unlikely( !f->_extents.empty() )) {
@@ -666,7 +664,7 @@ Parser::finalize(Function *f)
         return;
     }
     
-    vector<Block*>::const_iterator bit = blocks.begin();
+    auto bit = blocks.begin();
     FuncExtent * ext = NULL;
     Address ext_s = (*bit)->start();
     Address ext_e = ext_s;

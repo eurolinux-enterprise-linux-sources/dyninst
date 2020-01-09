@@ -38,7 +38,8 @@
 #include "proccontrol/src/irpc.h"
 #include "proccontrol/src/response.h"
 #include "proccontrol/src/int_event.h"
-#include "dynutil/h/dyn_regs.h"
+#include "proccontrol/src/processplat.h"
+#include "common/h/dyn_regs.h"
 
 #if defined(os_windows)
 #include "proccontrol/src/windows_process.h"
@@ -360,7 +361,6 @@ void HandlerPool::addEventToSet(Event::ptr ev, set<Event::ptr> &ev_set) const
 
 bool HandlerPool::handleEvent(Event::ptr orig_ev)
 {
-   EventType etype = orig_ev->getEventType();
    Event::ptr cb_replacement_ev = Event::ptr();
 
    /**
@@ -486,7 +486,7 @@ bool HandlerPool::handleEvent(Event::ptr orig_ev)
 }
 
 std::set<HandlerPool *> HandlerPool::procsAsyncPending;
-Mutex HandlerPool::asyncPendingLock;
+Mutex<> HandlerPool::asyncPendingLock;
 
 void HandlerPool::markProcAsyncPending(HandlerPool *p)
 {
@@ -613,16 +613,13 @@ Handler::handler_ret_t HandleSignal::handleEvent(Event::ptr ev)
    int signal_no = sigev->getSignal();
    thrd->setContSignal(signal_no);
 
-#if !defined(os_windows)
-   SignalMask *smask = proc->getSigMask();
-   if (smask) {
-      dyn_sigset_t mask = smask->getSigMask();
-      if (!sigismember(&mask, signal_no)) {
+   int_signalMask *sigproc = proc->getSignalMask();
+   if (sigproc) {
+      if (!sigproc->allowSignal(signal_no)) {
          pthrd_printf("Not giving callback on signal because its not in the SignalMask\n");
          ev->setSuppressCB(true);
       }
    }
-#endif
 
    return ret_success;
 }
@@ -659,11 +656,7 @@ Handler::handler_ret_t HandlePostExit::handleEvent(Event::ptr ev)
    
    ProcPool()->condvar()->lock();
 
-#if !defined(os_windows)
-   // On Windows, this is the only callback we get, so delay setting exited
-   // until cleanup
    proc->setState(int_process::exited);
-#endif
    ProcPool()->rmProcess(proc);
    if(proc->wasForcedTerminated())
    {
@@ -753,6 +746,8 @@ Handler::handler_ret_t HandleCrash::handleEvent(Event::ptr ev)
    int_thread *thrd = ev->getThread()->llthrd();
    assert(proc);
    assert(thrd);
+   if( !proc || !thrd) return ret_error;
+   
    EventCrash *event = static_cast<EventCrash *>(ev.get());
 
    if (proc->wasForcedTerminated()) {
@@ -893,6 +888,9 @@ Handler::handler_ret_t HandleThreadCreate::handleEvent(Event::ptr ev)
 
    pthrd_printf("Handle thread create for %d/%d with new thread %d\n",
 	   proc->getPid(), thrd ? thrd->getLWP() : (Dyninst::LWP)(-1), threadev->getLWP());
+
+   if (thrd && thrd->getPostponedSyscallState().isDesynced())
+      thrd->getPostponedSyscallState().restoreState();
 
    if (ev->getEventType().code() == EventType::UserThreadCreate) {
       //If we support both user and LWP thread creation, and we're doing a user
@@ -1153,10 +1151,15 @@ Handler::handler_ret_t HandlePostFork::handleEvent(Event::ptr ev)
        child_proc = int_process::createProcess(child_pid, parent_proc);
    }
 
-   if (parent_proc->fork_isTracking() == FollowFork::DisableBreakpointsDetach) {
+   int_followFork *fork_proc = parent_proc->getFollowFork();
+   if (fork_proc->fork_isTracking() == FollowFork::DisableBreakpointsDetach) {
       //Silence this event.  Child will be detached.
       ev->setSuppressCB(true);
    }
+
+   int_thread *thrd = ev->getThread()->llthrd();
+   if (thrd && thrd->getPostponedSyscallState().isDesynced())
+      thrd->getPostponedSyscallState().restoreState();
 
    assert(child_proc);
    return child_proc->forked() ? ret_success : ret_error;
@@ -1185,7 +1188,8 @@ Handler::handler_ret_t HandlePostForkCont::handleEvent(Event::ptr ev)
    pthrd_printf("Handling post-fork continue for child %d\n", child_pid);
    assert(child_proc);
 
-   if (parent_proc->fork_isTracking() == FollowFork::DisableBreakpointsDetach) {
+   int_followFork *fork_proc = parent_proc->getFollowFork();
+   if (fork_proc->fork_isTracking() == FollowFork::DisableBreakpointsDetach) {
       child_proc->throwDetachEvent(false, false);
    }
    else {
@@ -1247,6 +1251,50 @@ void HandleSingleStep::getEventTypesHandled(vector<EventType> &etypes)
 Handler::handler_ret_t HandleSingleStep::handleEvent(Event::ptr ev)
 {
    pthrd_printf("Handling event single step on %d/%d\n", 
+                ev->getProcess()->llproc()->getPid(), 
+                ev->getThread()->llthrd()->getLWP());
+   return ret_success;
+}
+
+HandlePreSyscall::HandlePreSyscall() :
+    Handler("Pre Syscall")
+{
+}
+
+HandlePreSyscall::~HandlePreSyscall()
+{
+}
+
+void HandlePreSyscall::getEventTypesHandled(vector<EventType> &etypes)
+{
+   etypes.push_back(EventType(EventType::Pre, EventType::PreSyscall));
+}
+
+Handler::handler_ret_t HandlePreSyscall::handleEvent(Event::ptr ev)
+{
+   pthrd_printf("Handling event pre-syscall on %d/%d\n", 
+                ev->getProcess()->llproc()->getPid(), 
+                ev->getThread()->llthrd()->getLWP());
+   return ret_success;
+}
+
+HandlePostSyscall::HandlePostSyscall() :
+    Handler("Post Syscall")
+{
+}
+
+HandlePostSyscall::~HandlePostSyscall()
+{
+}
+
+void HandlePostSyscall::getEventTypesHandled(vector<EventType> &etypes)
+{
+   etypes.push_back(EventType(EventType::Post, EventType::PostSyscall));
+}
+
+Handler::handler_ret_t HandlePostSyscall::handleEvent(Event::ptr ev)
+{
+   pthrd_printf("Handling event post-syscall on %d/%d\n", 
                 ev->getProcess()->llproc()->getPid(), 
                 ev->getThread()->llthrd()->getLWP());
    return ret_success;
@@ -1951,6 +1999,47 @@ void HandleAsyncIO::getEventTypesHandled(std::vector<EventType> &etypes)
    etypes.push_back(EventType(EventType::None, EventType::AsyncSetAllRegs));
 }
 
+HandleAsyncFileRead::HandleAsyncFileRead() :
+   Handler("HandleAsyncFileRead")
+{
+}
+
+HandleAsyncFileRead::~HandleAsyncFileRead()
+{
+}
+
+Handler::handler_ret_t HandleAsyncFileRead::handleEvent(Event::ptr ev)
+{
+   EventAsyncFileRead::ptr fileev = ev->getEventAsyncFileRead();
+   assert(fileev);
+   int_eventAsyncFileRead *iev = fileev->getInternal();
+   int_process *proc = ev->getProcess()->llproc();
+   
+   if (iev->resp)
+      delete iev->resp;
+
+   if (iev->isComplete())
+      return ret_success;
+
+   //Setup a read on the next part of the file, starting at the offset
+   // after this read ends.
+   int_eventAsyncFileRead *new_iev = new int_eventAsyncFileRead();
+   new_iev->filename = iev->filename;
+   new_iev->offset = iev->offset + iev->size;
+   new_iev->whole_file = iev->whole_file;
+   bool result = proc->getRemoteIO()->plat_getFileDataAsync(new_iev);
+   if (!result) {
+      pthrd_printf("Error requesting file data on %d from callback\n", proc->getPid());
+      return ret_error;
+   }
+   return ret_success;
+}
+
+void HandleAsyncFileRead::getEventTypesHandled(std::vector<EventType> &etypes)
+{
+   etypes.push_back(EventType(EventType::None, EventType::AsyncFileRead));
+}
+
 HandleNop::HandleNop() :
    Handler("Nop Handler")
 {
@@ -2335,6 +2424,7 @@ bool HandleCallbacks::removeCallback(EventType oet, Process::cb_func_t func)
    bool removed_cb = false;
    std::vector<EventType> real_ets;
    getRealEvents(oet, real_ets);
+   pthrd_printf("Removing event %s callback with function %p\n", oet.name().c_str(), func);
    
    for (std::vector<EventType>::iterator i = real_ets.begin(); i != real_ets.end(); i++)
    {
@@ -2347,6 +2437,7 @@ bool HandleCallbacks::removeCallback(EventType oet, Process::cb_func_t func)
             bool result = removeCallback_int(et, func);
             if (result)
                removed_cb = true;
+            break;
          }
          case EventType::Any: {
             bool result1 = removeCallback_int(EventType(EventType::Pre, et.code()), func);
@@ -2386,6 +2477,7 @@ bool HandleCallbacks::removeCallback(EventType et)
       case EventType::Post:
       case EventType::None: {
          result = removeCallback_int(et);
+         break;
       }
       case EventType::Any: {
          bool result1 = removeCallback_int(EventType(EventType::Pre, et.code()));
@@ -2421,6 +2513,27 @@ bool HandleCallbacks::removeCallback(Process::cb_func_t func)
    return true;
 }
 
+HandlePostponedSyscall::HandlePostponedSyscall() :
+   Handler("Postponed Syscall")
+{
+}
+
+HandlePostponedSyscall::~HandlePostponedSyscall()
+{
+}
+
+void HandlePostponedSyscall::getEventTypesHandled(vector<EventType> &etypes)
+{
+   etypes.push_back(EventType(EventType::None, EventType::PostponedSyscall));
+}
+
+Handler::handler_ret_t HandlePostponedSyscall::handleEvent(Event::ptr ev)
+{
+   int_thread *thrd = ev->getThread()->llthrd();
+   thrd->getPostponedSyscallState().desyncState(int_thread::running);
+   return ret_success;
+}
+
 HandlerPool *createDefaultHandlerPool(int_process *p)
 {
    static bool initialized = false;
@@ -2434,6 +2547,8 @@ HandlerPool *createDefaultHandlerPool(int_process *p)
    static HandleThreadCleanup *hthreadcleanup = NULL;
    static HandleThreadStop *hthreadstop = NULL;
    static HandleSingleStep *hsinglestep = NULL;
+   static HandlePreSyscall *hpresyscall = NULL;
+   static HandlePostSyscall *hpostsyscall = NULL;
    static HandleCrash *hcrash = NULL;
    static HandleBreakpoint *hbpoint = NULL;
    static HandleBreakpointContinue *hbpcontinue = NULL;
@@ -2453,6 +2568,8 @@ HandlerPool *createDefaultHandlerPool(int_process *p)
    static iRPCPreCallbackHandler *hprerpc = NULL;
    static HandlePreBootstrap* hprebootstrap = NULL;
    static iRPCLaunchHandler *hrpclaunch = NULL;
+   static HandleAsyncFileRead *hasyncfileread = NULL;
+   static HandlePostponedSyscall *hppsyscall = NULL;
    if (!initialized) {
       hbootstrap = new HandleBootstrap();
       hsignal = new HandleSignal();
@@ -2464,6 +2581,8 @@ HandlerPool *createDefaultHandlerPool(int_process *p)
       hthreadcleanup = new HandleThreadCleanup();
       hthreadstop = new HandleThreadStop();
       hsinglestep = new HandleSingleStep();
+      hpresyscall = new HandlePreSyscall();
+      hpostsyscall = new HandlePostSyscall();
       hcrash = new HandleCrash();
       hbpoint = new HandleBreakpoint();
       hbpcontinue = new HandleBreakpointContinue();
@@ -2483,6 +2602,8 @@ HandlerPool *createDefaultHandlerPool(int_process *p)
       hnop = new HandleNop();
       hdetach = new HandleDetach();
       hemulatedsinglestep = new HandleEmulatedSingleStep();
+      hasyncfileread = new HandleAsyncFileRead();
+      hppsyscall = new HandlePostponedSyscall();
       initialized = true;
    }
    HandlerPool *hpool = new HandlerPool(p);
@@ -2496,6 +2617,8 @@ HandlerPool *createDefaultHandlerPool(int_process *p)
    hpool->addHandler(hthreadcleanup);
    hpool->addHandler(hthreadstop);
    hpool->addHandler(hsinglestep);
+   hpool->addHandler(hpresyscall);
+   hpool->addHandler(hpostsyscall);
    hpool->addHandler(hcrash);
    hpool->addHandler(hbpoint);
    hpool->addHandler(hbpcontinue);
@@ -2515,6 +2638,8 @@ HandlerPool *createDefaultHandlerPool(int_process *p)
    hpool->addHandler(hnop);
    hpool->addHandler(hdetach);
    hpool->addHandler(hemulatedsinglestep);
+   hpool->addHandler(hasyncfileread);
+   hpool->addHandler(hppsyscall);
    plat_createDefaultHandlerPool(hpool);
 
    print_add_handler = false;

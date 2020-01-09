@@ -34,7 +34,7 @@
 #include "Decoder.h"
 #include "PCErrors.h"
 
-#include "common/h/dthread.h"
+#include "common/src/dthread.h"
 #include "util.h"
 
 #include <set>
@@ -81,6 +81,7 @@ class PC_EXPORT Generator
       exiting
    } state_t;
    state_t state;
+   static const char* generatorStateStr(state_t);
    virtual bool isExitingState();
    virtual void setState(state_t newstate);
    virtual state_t getState();
@@ -103,7 +104,7 @@ class PC_EXPORT Generator
    static bool allStopped(int_process *proc, void *);
 
    static std::set<gen_cb_func_t> CBs;
-   static Mutex *cb_lock;
+   static Mutex<> *cb_lock;
 
    //Public interface
    //  Implemented by architectures

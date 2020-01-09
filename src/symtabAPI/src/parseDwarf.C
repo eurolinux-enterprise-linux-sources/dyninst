@@ -42,11 +42,11 @@
 #include "Module.h"
 #include "symtabAPI/src/Object.h"
 #include "Collections.h"
-#include "common/h/pathName.h"
+#include "common/src/pathName.h"
 #include "Variable.h"
 #include "Type-mem.h"
 #include <stdarg.h>
-#include "dynutil/h/Annotatable.h"
+#include "common/h/Annotatable.h"
 #include "annotations.h"
 #include "debug.h"
 
@@ -72,8 +72,6 @@ int dwarf_get_fde_info_for_cfa_reg3(
 }
 }
 #endif
-
-std::map<Dwarf_Off, fieldListType*> enclosureMap;
 
 using namespace Dyninst;
 using namespace Dyninst::SymtabAPI;

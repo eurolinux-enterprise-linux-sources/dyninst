@@ -78,12 +78,7 @@ bool PCEventHandler::handle_internal(EventPtr ev) {
 
     if( !(   ev->getEventType().code() == EventType::ForceTerminate 
              || ev->getEventType().code() == EventType::Crash
-             || (ev->getEventType().code() == EventType::Exit 
-#if !defined(os_windows)
-                 && ev->getEventType().time() == EventType::Pre)
-#else
-           )
-#endif
+             || ev->getEventType().code() == EventType::Exit 
        ) ) 
     {
         // This means we already saw the entry to exit event and we can no longer
@@ -245,10 +240,20 @@ bool PCEventHandler::handle_internal(EventPtr ev) {
 }
 
 bool PCEventHandler::handleExit(EventExit::const_ptr ev, PCProcess *evProc) const {
-    evProc->setReportingEvent(false);
+  evProc->setReportingEvent(false);
+  static bool reportPreExit = true;//PCEventMuxer::useBreakpoint(EventType(EventType::Pre, EventType::Exit));
+    
     if( ev->getEventType().time() == EventType::Pre ) {
-        // This is handled as an RT signal on all platforms for now
+               proccontrol_printf("%s[%d]: reporting exit entry event to BPatch layer\n",
+                        FILE__, __LINE__);
+	       if(reportPreExit) {
+		 proccontrol_printf("%s[%d]: registering normal exit with code %d\n",
+				    FILE__, __LINE__, ev->getExitCode());
+		 BPatch::bpatch->registerNormalExit(evProc, ev->getExitCode());
+	       }
+	       
     }else{
+#if 0
 		std::vector<PCThread*> thrds;
 		evProc->getThreads(thrds);
 		for(std::vector<PCThread*>::iterator i = thrds.begin();
@@ -258,8 +263,8 @@ bool PCEventHandler::handleExit(EventExit::const_ptr ev, PCProcess *evProc) cons
 			// Whether we got thread exits or not, all remaining threads are gone post-exit.
 			BPatch::bpatch->registerThreadExit(evProc, *i);
 		}
-		BPatch::bpatch->registerNormalExit(evProc, ev->getExitCode());
-	
+		if(!reportPreExit) BPatch::bpatch->registerNormalExit(evProc, ev->getExitCode());
+#endif	
 	}
 
     return true;
@@ -842,11 +847,11 @@ bool PCEventHandler::handleLibrary(EventLibrary::const_ptr ev, PCProcess *evProc
         Address dataAddress = (*i)->getLoadAddress();
         if( evProc->usesDataLoadAddress() ) dataAddress = (*i)->getDataLoadAddress();
 
-        fileDescriptor tmpDesc((*i)->getName(), (*i)->getLoadAddress(),
+        fileDescriptor tmpDesc((*i)->getAbsoluteName(), (*i)->getLoadAddress(),
                     dataAddress, true);
 		if( execFd == tmpDesc ) {
             proccontrol_printf("%s[%d]: ignoring Library event for executable %s\n",
-                    FILE__, __LINE__, (*i)->getName().c_str());
+                    FILE__, __LINE__, (*i)->getAbsoluteName().c_str());
             continue;
         }
 
@@ -854,7 +859,7 @@ bool PCEventHandler::handleLibrary(EventLibrary::const_ptr ev, PCProcess *evProc
                 evProc, evProc->getHybridMode());
         if( newObj == NULL ) {
             proccontrol_printf("%s[%d]: failed to create mapped object for library %s\n",
-                    FILE__, __LINE__, (*i)->getName().c_str());
+                    FILE__, __LINE__, (*i)->getAbsoluteName().c_str());
             return false;
         }
 
@@ -894,7 +899,7 @@ bool PCEventHandler::handleLibrary(EventLibrary::const_ptr ev, PCProcess *evProc
     for(set<Library::ptr>::const_iterator i = deleted.begin(); i != deleted.end(); ++i) {
         Address dataAddress = (*i)->getLoadAddress();
         if( evProc->usesDataLoadAddress() ) dataAddress = (*i)->getDataLoadAddress();
-        deletedDescriptors.push_back(fileDescriptor((*i)->getName(), (*i)->getLoadAddress(),
+        deletedDescriptors.push_back(fileDescriptor((*i)->getAbsoluteName(), (*i)->getLoadAddress(),
                     dataAddress, true));
     }
 

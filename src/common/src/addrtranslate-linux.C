@@ -28,11 +28,11 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "common/h/addrtranslate.h"
+#include "common/src/addrtranslate.h"
 #include "common/src/addrtranslate-sysv.h"
-#include "common/h/linuxKludges.h"
-#include "common/h/parseauxv.h"
-#include "common/h/pathName.h"
+#include "common/src/linuxKludges.h"
+#include "common/src/parseauxv.h"
+#include "common/src/pathName.h"
 
 #include <elf.h>
 #include <cstdio>
@@ -53,7 +53,10 @@ public:
    ProcessReaderPtrace(int pid_);
    virtual bool start();
    virtual bool ReadMem(Address inTraced, void *inSelf, unsigned amount);
-   virtual bool GetReg(MachRegister /*reg*/, MachRegisterVal &/*val*/) { assert(0); }
+   virtual bool GetReg(MachRegister /*reg*/, MachRegisterVal &/*val*/) { 
+     assert(0); 
+     return false;
+   }
    virtual bool done();
 
    virtual ~ProcessReaderPtrace();

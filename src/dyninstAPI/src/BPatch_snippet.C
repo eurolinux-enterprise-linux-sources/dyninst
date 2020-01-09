@@ -34,8 +34,8 @@
 
 #include <string.h>
 
-#include "common/h/Time.h"
-#include "common/h/timing.h"
+#include "common/src/Time.h"
+#include "common/src/timing.h"
 
 #include "BPatch.h"
 #include "BPatch_addressSpace.h"
@@ -728,8 +728,6 @@ char *BPatch_variableExpr::getNameWithLength(char *buffer, int max)
 
 void *BPatch_variableExpr::getAddress()
 {
-  //  for AIX this may be broken, in the case where the mutator is 32b
-  //  and the mutatee is 64b.
   return address;
 }
 
@@ -964,7 +962,7 @@ BPatch_registerExpr::BPatch_registerExpr(Dyninst::MachRegister mach) {
    bool whocares;
    Register reg = convertRegID(mach, whocares);
    ast_wrapper = AstNodePtr(AstNode::operandNode(AstNode::origRegister,
-                                                 (void *)reg));
+                                                 (void *)(intptr_t)reg));
     assert(BPatch::bpatch != NULL);
 
     // Registers can hold a lot of different types...
@@ -1022,7 +1020,8 @@ BPatch_variableExpr::BPatch_variableExpr(char *in_name,
   address(in_address),
   scope(NULL),
   isLocal(false),
-  type(typ)
+  type(typ),
+  intvar(NULL)
 {
     ast_wrapper = ast_wrapper_;
     assert(ast_wrapper);
@@ -1044,7 +1043,8 @@ BPatch_variableExpr::BPatch_variableExpr(BPatch_addressSpace *in_addSpace,
     address(NULL),
     scope(NULL),
     isLocal(false),
-    type(type)
+    type(type),
+    intvar(NULL)
 {
   const image_variable* img_var = NULL;
   if(iv)
@@ -1157,10 +1157,12 @@ BPatch_variableExpr::BPatch_variableExpr(BPatch_addressSpace *in_addSpace,
                                          BPatch_type *typ,
                                          BPatch_storageClass in_storage,
                                          BPatch_point *scp) :
+   name(NULL),
    appAddSpace(in_addSpace),
    lladdrSpace(in_lladdrSpace),
    address(in_address),
-   type(typ)
+   type(typ),
+   intvar(NULL)
 {
    vector<AstNodePtr> variableASTs;
    AstNodePtr variableAst;
@@ -1227,9 +1229,13 @@ BPatch_variableExpr::BPatch_variableExpr(BPatch_addressSpace *in_addSpace,
                                          AddressSpace *in_lladdSpace,
                                          BPatch_localVar *lv, BPatch_type *typ,
                                          BPatch_point *scp):
+   name(NULL),
    appAddSpace(in_addSpace),
    lladdrSpace(in_lladdSpace),
-   type(typ)
+   address(NULL),
+   isLocal(false),
+   type(typ),
+   intvar(NULL)
 {
 
         //Create Ast's for all members in the location list.
@@ -1627,14 +1633,14 @@ static void constructorHelper(
     }
 
     // create callback ID argument
-    int cb_id = BPatch::bpatch->getStopThreadCallbackID(bp_cb); 
-    idNode = AstNode::operandNode(AstNode::Constant, (void*)(int) cb_id );
+    intptr_t cb_id = BPatch::bpatch->getStopThreadCallbackID(bp_cb); 
+    idNode = AstNode::operandNode(AstNode::Constant, (void*) cb_id );
     BPatch_type *inttype = BPatch::bpatch->stdTypes->findType("int");
     assert(inttype != NULL);
     idNode->setType(inttype);
 
     // create interpret/usecache argument
-    int ic = 0;
+    intptr_t ic = 0;
     if (useCache)
         ic += 1;
     if (interp == BPatch_interpAsTarget)
@@ -1790,5 +1796,12 @@ BPatch_scrambleRegistersExpr::BPatch_scrambleRegistersExpr(){
 Dyninst::PatchAPI::Snippet::Ptr Dyninst::PatchAPI::convert(const BPatch_snippet *snip) {
    // TODO when this class exists
    return snip->ast_wrapper;
+}
+
+bool BPatch_snippet::checkTypesAtPoint(BPatch_point* p) const
+{
+  if(!p) return true;
+  
+  return ast_wrapper->checkType(p->getFunction()) != BPatch::bpatch->type_Error;
 }
 

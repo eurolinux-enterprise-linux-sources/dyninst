@@ -28,7 +28,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "dynutil/h/dyntypes.h"
+#include "common/h/dyntypes.h"
+#include "common/h/MachSyscall.h"
 #include "proccontrol/src/int_process.h"
 #include "proccontrol/src/int_handler.h"
 #include "proccontrol/src/int_event.h"
@@ -202,6 +203,10 @@ std::string EventType::name() const
       STR_CASE(AsyncWrite);
       STR_CASE(AsyncReadAllRegs);
       STR_CASE(AsyncSetAllRegs);
+      STR_CASE(AsyncFileRead);
+      STR_CASE(PostponedSyscall);
+      STR_CASE(PreSyscall);
+      STR_CASE(PostSyscall);
       default: return prefix + std::string("Unknown");
    }
 }
@@ -597,7 +602,6 @@ EventRPC::EventRPC(rpc_wrapper *wrapper_) :
 
 EventRPC::~EventRPC()
 {
-   memset(wrapper, 0, sizeof(wrapper));
    delete wrapper;
    wrapper = NULL;
 
@@ -663,6 +667,65 @@ EventSingleStep::EventSingleStep() :
 }
 
 EventSingleStep::~EventSingleStep()
+{
+}
+
+EventSyscall::EventSyscall(EventType type_) :
+   Event(type_)
+{
+}
+
+EventSyscall::~EventSyscall()
+{
+}
+
+Address EventSyscall::getAddress() const
+{
+    MachRegisterVal pc;
+    Process::const_ptr proc = getProcess();
+    Thread::const_ptr thrd = getThread();
+    thrd->getRegister(MachRegister::getPC(proc->getArchitecture()), pc);
+    return pc;
+}
+
+long EventSyscall::getSyscallNumber() const
+{
+    MachRegisterVal syscallNumber;
+    Process::const_ptr proc = getProcess();
+    Thread::const_ptr thrd = getThread();
+    thrd->getRegister(MachRegister::getSyscallNumberReg(proc->getArchitecture()), syscallNumber);
+    return syscallNumber;
+}
+
+MachSyscall EventSyscall::getSyscall() const
+{
+    return makeFromEvent(this);
+}
+
+long EventPostSyscall::getReturnValue() const
+{
+    MachRegisterVal syscallReturnValue;
+    Process::const_ptr proc = getProcess();
+    Thread::const_ptr thrd = getThread();
+    thrd->getRegister(MachRegister::getSyscallReturnValueReg(proc->getArchitecture()), syscallReturnValue);
+    return syscallReturnValue;
+}
+
+EventPreSyscall::EventPreSyscall() :
+    EventSyscall(EventType(EventType::Pre, EventType::PreSyscall))
+{
+}
+
+EventPreSyscall::~EventPreSyscall()
+{
+}
+
+EventPostSyscall::~EventPostSyscall()
+{
+}
+
+EventPostSyscall::EventPostSyscall() :
+    EventSyscall(EventType(EventType::Post, EventType::PostSyscall))
 {
 }
 
@@ -1020,11 +1083,70 @@ EventControlAuthority::Trigger EventControlAuthority::eventTrigger() const
    return iev->trigger;
 }
 
+EventAsyncFileRead::EventAsyncFileRead(int_eventAsyncFileRead *iev_) :
+   Event(EventType(EventType::None, EventType::AsyncFileRead)),
+   iev(iev_)
+{
+}
+
+EventAsyncFileRead::~EventAsyncFileRead()
+{
+   delete iev;
+}
+
+std::string EventAsyncFileRead::getFilename() const
+{
+   return iev->filename;
+}
+
+size_t EventAsyncFileRead::getReadSize() const
+{
+   return iev->orig_size;
+}
+
+Dyninst::Offset EventAsyncFileRead::getReadOffset() const
+{
+   return iev->offset;
+}
+
+void *EventAsyncFileRead::getBuffer() const
+{
+   return iev->data;
+}
+
+size_t EventAsyncFileRead::getBufferSize() const
+{
+   return iev->size;
+}
+
+bool EventAsyncFileRead::isEOF() const
+{
+   return (iev->size != iev->orig_size);
+}
+
+int EventAsyncFileRead::errorCode() const 
+{
+   return iev->errorcode;
+}
+
+int_eventAsyncFileRead *EventAsyncFileRead::getInternal()
+{
+   return iev;
+}
+
 int_eventControlAuthority *EventControlAuthority::getInternalEvent() const 
 {
    return iev;
 }
 
+EventPostponedSyscall::EventPostponedSyscall() :
+   Event(EventType(EventType::None, EventType::PostponedSyscall))
+{
+}
+
+EventPostponedSyscall::~EventPostponedSyscall()
+{
+}
 
 int_eventBreakpoint::int_eventBreakpoint(Address a, sw_breakpoint *, int_thread *thr) :
    addr(a),
@@ -1077,7 +1199,9 @@ int_eventBreakpointRestore::~int_eventBreakpointRestore()
 {
 }
 
-int_eventNewLWP::int_eventNewLWP()
+int_eventNewLWP::int_eventNewLWP() :
+   lwp(NULL_LWP),
+   attach_status(int_thread::as_unknown)
 {
 }
 
@@ -1151,6 +1275,7 @@ int_eventThreadDB::~int_eventThreadDB()
 
 int_eventDetach::int_eventDetach() :
    temporary_detach(false),
+   leave_stopped(false),
    removed_bps(false),
    done(false),
    had_error(false)
@@ -1177,8 +1302,18 @@ int_eventControlAuthority::int_eventControlAuthority(string toolname_, unsigned 
 {
 }
 
-int_eventControlAuthority::int_eventControlAuthority()
-{   
+int_eventControlAuthority::int_eventControlAuthority() :
+   toolid(0),
+   priority(0),
+   trigger(EventControlAuthority::ControlUnset),
+   control_lost(false),
+   handled_bps(false),
+   took_ca(false),
+   did_desync(false),
+   unset_desync(false),
+   dont_delete(false),
+   waiting_on_stop(false)
+{
 }
 
 int_eventControlAuthority::~int_eventControlAuthority()
@@ -1187,6 +1322,10 @@ int_eventControlAuthority::~int_eventControlAuthority()
 
 int_eventAsyncIO::int_eventAsyncIO(response::ptr resp_, asyncio_type iot_) : 
    resp(resp_),
+   local_memory(NULL),
+   remote_addr(0),
+   size(0),
+   opaque_value(NULL),
    iot(iot_),
    rpool(NULL)
 {
@@ -1196,6 +1335,31 @@ int_eventAsyncIO::int_eventAsyncIO(response::ptr resp_, asyncio_type iot_) :
 int_eventAsyncIO::~int_eventAsyncIO()
 {
    pthrd_printf("Deleting int_eventAsyncIO at %p\n", this);
+}
+
+int_eventAsyncFileRead::int_eventAsyncFileRead() :
+   data(NULL),
+   size(0),
+   orig_size(0),
+   to_free(NULL),
+   offset(0),
+   errorcode(0),
+   whole_file(false),
+   resp(NULL)
+{
+}
+
+int_eventAsyncFileRead::~int_eventAsyncFileRead()
+{
+   if (to_free)
+      free(to_free);
+}
+
+bool int_eventAsyncFileRead::isComplete()
+{
+   if (!whole_file)
+      return true;
+   return (size != orig_size);
 }
 
 #define DEFN_EVENT_CAST(NAME, TYPE) \
@@ -1275,3 +1439,9 @@ DEFN_EVENT_CAST(EventAsyncRead, AsyncRead)
 DEFN_EVENT_CAST(EventAsyncWrite, AsyncWrite)
 DEFN_EVENT_CAST(EventAsyncReadAllRegs, AsyncReadAllRegs)
 DEFN_EVENT_CAST(EventAsyncSetAllRegs, AsyncSetAllRegs)
+DEFN_EVENT_CAST(EventAsyncFileRead, AsyncFileRead)
+DEFN_EVENT_CAST(EventPostponedSyscall, PostponedSyscall)
+DEFN_EVENT_CAST2(EventSyscall, PreSyscall, PostSyscall)
+DEFN_EVENT_CAST(EventPreSyscall, PreSyscall)
+DEFN_EVENT_CAST(EventPostSyscall, PostSyscall)
+

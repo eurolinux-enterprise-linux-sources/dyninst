@@ -65,10 +65,8 @@ int_iRPC::int_iRPC(void *binary_blob_,
    inffree_target(0),
    async(async_),
    freeBinaryBlob(false),
-   needs_clean(false),
    restore_internal(false),
    counted_sync(false),
-   lock_live(0),
    malloc_result(0),
    restore_at_end(int_thread::none),
    directFree_(false),
@@ -119,7 +117,11 @@ void int_iRPC::setState(int_iRPC::State s)
 {
    int old_state = (int) state;
    int new_state = (int) s;
-   assert(new_state >= old_state);
+   if(new_state < old_state)
+   {
+     assert(!"Illegal state reversion");
+     return;
+   }
    state = s;
 }
 
@@ -329,7 +331,6 @@ bool iRPCMgr::postRPCToProc(int_process *proc, int_iRPC::ptr rpc)
    int_threadPool *tp = proc->threadPool();
    int min_rpc_count = -1;
    int_thread *selected_thread = NULL;
-   bool found_user_running_thread = false;
    for (int_threadPool::iterator i = tp->begin(); i != tp->end(); i++) {
       int_thread *thr = *i;
       assert(thr);
@@ -341,9 +342,6 @@ bool iRPCMgr::postRPCToProc(int_process *proc, int_iRPC::ptr rpc)
       if(thr->notAvailableForRPC()) {
          pthrd_printf("Skipping thread that is marked as system\n");
          continue;
-      }
-      if (thr->getUserState().getState() == int_thread::running) {
-         found_user_running_thread = true;
       }
 
       // Don't post RPCs to threads that are in the middle of exiting
@@ -364,7 +362,14 @@ bool iRPCMgr::postRPCToProc(int_process *proc, int_iRPC::ptr rpc)
    }
 
    selected_thread = createThreadForRPC(proc, selected_thread);
-   pthrd_printf("Selected thread %d for iRPC %lu\n", selected_thread->getLWP(), rpc->id());
+   if(!selected_thread)
+   {
+     pthrd_printf("No thread available for iRPC %lu, aborting\n", rpc->id());
+     return false;
+     
+   }
+   pthrd_printf("Selected thread %d for iRPC %lu\n", selected_thread->getLWP(), rpc->id());   
+
 
    assert(selected_thread);
    return postRPCToThread(selected_thread, rpc);
@@ -719,6 +724,8 @@ bool int_iRPC::saveRPCState()
                    id(), thrd->llproc()->getPid(), thrd->getLWP());
       bool result = fillInAllocation();
       assert(result);
+      if(!result) return false;
+      
    }
    assert(allocation());   
 
@@ -728,6 +735,8 @@ bool int_iRPC::saveRPCState()
                    thrd->llproc()->getPid(), thrd->getLWP());
       bool result = thread()->saveRegsForRPC(regsave_result);
       assert(result);
+      if(!result) return false;
+      
    }
    
    if (shouldSaveData() && !allocation()->orig_data)
@@ -741,6 +750,8 @@ bool int_iRPC::saveRPCState()
       memsave_result = mem_response::createMemResponse((char *) allocation()->orig_data, allocSize());
       bool result = thrd->llproc()->readMem(addr(), memsave_result, (thrd->isRPCEphemeral() ? thrd : NULL));
       assert(result);
+      if(!result) return false;
+      
    }
 
    return true;
@@ -1035,6 +1046,8 @@ Handler::handler_ret_t iRPCHandler::handleEvent(Event::ptr ev)
       ievent->alloc_regresult = reg_response::createRegResponse();
       bool result = proc->plat_collectAllocationResult(thr, ievent->alloc_regresult);
       assert(result);
+      if(!result) return ret_error;
+      
       proc->handlerPool()->notifyOfPendingAsyncs(ievent->alloc_regresult, ev);
    }
 
@@ -1049,6 +1062,7 @@ Handler::handler_ret_t iRPCHandler::handleEvent(Event::ptr ev)
                                             rpc->allocSize(),
                                             ievent->memrestore_response);
       assert(result);
+      if(!result) return ret_error;
    }
    if (rpc->directFree()) {
 	   assert(rpc->addr());
@@ -1086,6 +1100,7 @@ Handler::handler_ret_t iRPCHandler::handleEvent(Event::ptr ev)
       pthrd_printf("Restoring all registers\n");
       bool result = thr->restoreRegsForRPC(isLastRPC, ievent->regrestore_response);
       assert(result);
+      if(!result) return ret_error;
    }
 
    set<response::ptr> async_pending;
@@ -1332,7 +1347,6 @@ IRPC::IRPC(rpc_wrapper *wrapper_) :
 
 IRPC::~IRPC()
 {
-  memset(wrapper, 0, sizeof(wrapper));
   delete wrapper;
   wrapper = NULL;
 }

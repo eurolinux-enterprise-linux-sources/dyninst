@@ -31,7 +31,7 @@
 #include "InstructionDecoder-power.h"
 #include "Immediate.h"
 #include <boost/assign/list_of.hpp>
-#include "../../common/h/singleton_object_pool.h"
+#include "../../common/src/singleton_object_pool.h"
 
 namespace Dyninst
 {
@@ -84,7 +84,9 @@ namespace Dyninst
 
     InstructionDecoder_power::InstructionDecoder_power(Architecture a)
       : InstructionDecoderImpl(a),
-	isRAWritten(false)
+        insn(0), insn_in_progress(NULL),
+	isRAWritten(false), invertBranchCondition(false),
+        isFPInsn(false), bcIsConditional(false)
     {
         power_entry::buildTables();
     }

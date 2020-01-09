@@ -28,7 +28,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "common/h/Types.h"
+#include "common/src/Types.h"
 #include "proccontrol/src/int_thread_db.h"
 
 
@@ -40,8 +40,8 @@
 #include <dlfcn.h>
 #include <iostream>
 
-#include "common/h/dthread.h"
-#include "dynutil/h/SymReader.h"
+#include "common/src/dthread.h"
+#include "common/h/SymReader.h"
 #include "proccontrol/src/int_event.h"
 #include "proccontrol/h/Mailbox.h"
 
@@ -516,16 +516,16 @@ Event::ptr thread_db_process::decodeThreadEvent(td_event_msg_t *eventMsg, bool &
 }
 
 volatile bool thread_db_process::thread_db_initialized = false;
-Mutex thread_db_process::thread_db_init_lock;
+Mutex<> thread_db_process::thread_db_init_lock;
 
 thread_db_process::thread_db_process(Dyninst::PID p, std::string e, std::vector<std::string> envp, std::vector<std::string> a, std::map<int, int> f) :
   int_process(p, e, a, envp, f),
+  int_threadTracking(p, e, a, envp, f),
   thread_db_proc_initialized(false),
   threadAgent(NULL),
   createdThreadAgent(false),
   self(NULL),
   trigger_thread(NULL),
-  threadtracking(NULL),
   hasAsyncPending(false),
   initialThreadEventCreated(false),
   setEventSet(false),
@@ -540,13 +540,13 @@ thread_db_process::thread_db_process(Dyninst::PID p, std::string e, std::vector<
 }
 
 thread_db_process::thread_db_process(Dyninst::PID pid_, int_process *p) :
-  int_process(pid_, p), 
+  int_process(pid_, p),
+  int_threadTracking(pid_, p), 
   thread_db_proc_initialized(false),
   threadAgent(NULL),
   createdThreadAgent(false),
   self(NULL),
   trigger_thread(NULL),
-  threadtracking(NULL),
   hasAsyncPending(false),
   initialThreadEventCreated(false),
   setEventSet(false),
@@ -568,12 +568,8 @@ thread_db_process::~thread_db_process()
         delete brkptIter->second.first;
     }
 
-    if (threadtracking) {
-       delete threadtracking;
-       threadtracking = NULL;
-    }
-
-    delete self;
+    if (self)
+       delete self;
 }
 
 async_ret_t thread_db_process::initThreadWithHandle(td_thrhandle_t *thr, td_thrinfo_t *info, LWP lwp)
@@ -688,6 +684,7 @@ async_ret_t thread_db_process::initThreadDB() {
                pthrd_printf("Postponing thread_db initialization for async\n");
                return aret_async;
             }
+            //FALLTHROUGH
          default:
             perr_printf("Failed to create thread agent: %s(%d)\n",
                         tdErr2Str(errVal), errVal);
@@ -1544,7 +1541,7 @@ async_ret_t thread_db_process::getEventForThread(int_eventThreadDB *iev) {
          // this problem.
          handles.push_back(*evMsg.th_p);
       }
-      pthrd_printf("Received %lu messages from thread_db on %d\n", msgs.size(), getPid());
+      pthrd_printf("Received %lu messages from thread_db on %d\n", (unsigned long)msgs.size(), getPid());
       iev->msgs = msgs;
       iev->handles = handles;
       iev->completed_getmsgs = true;
@@ -1569,7 +1566,7 @@ async_ret_t thread_db_process::getEventForThread(int_eventThreadDB *iev) {
    return aret_success;
 }
 
-bool thread_db_process::threaddb_setTrackThreads(bool b, std::set<std::pair<int_breakpoint *, Address> > &bps,
+bool thread_db_process::setTrackThreads(bool b, std::set<std::pair<int_breakpoint *, Address> > &bps,
                                                  bool &add_bp)
 {
    if (b == track_threads) {
@@ -1590,20 +1587,12 @@ bool thread_db_process::threaddb_setTrackThreads(bool b, std::set<std::pair<int_
    return true;
 }
 
-bool thread_db_process::threaddb_isTrackingThreads()
+bool thread_db_process::isTrackingThreads()
 {
    return track_threads;
 }
 
-ThreadTracking *thread_db_process::threaddb_getThreadTracking() 
-{
-   if (!threadtracking) {
-      threadtracking = new ThreadTracking(proc());
-   }
-   return threadtracking;
-}
-
-bool thread_db_process::threaddb_refreshThreads()
+bool thread_db_process::refreshThreads()
 {
    EventThreadDB::ptr ev = EventThreadDB::ptr(new EventThreadDB());
    ev->setSyncType(Event::async);
@@ -1752,13 +1741,13 @@ bool thread_db_thread::getTLSPtr(Dyninst::Address &addr)
 //Empty place holder functions in-case we're built on a machine without libthread_db.so
 
 thread_db_process::thread_db_process(Dyninst::PID p, std::string e, std::vector<std::string> a, std::vector<std::string> envp, std::map<int, int> f) : 
-   int_process(p, e, a, envp, f)
+   int_threadTracking(p, e, a, envp, f)
 {
   cerr << "Thread DB process constructor" << endl;
 }
 
 thread_db_process::thread_db_process(Dyninst::PID pid_, int_process *p) :
-   int_process(pid_, p)
+   int_threadTracking(pid_, p)
 {
 }
 
@@ -1841,12 +1830,12 @@ bool thread_db_thread::plat_convertToSystemRegs(const int_registerPool &,
    return true;
 }
 
-async_ret_t thread_db_process::post_attach(bool, set<response::ptr> &) {
-   return aret_success;
+async_ret_t thread_db_process::post_attach(bool b, set<response::ptr> &s) {
+   return int_process::post_attach(b, s);
 }
 
-async_ret_t thread_db_process::post_create(std::set<response::ptr> &) {
-   return aret_success;
+async_ret_t thread_db_process::post_create(std::set<response::ptr> &async_responses) {
+   return int_process::post_create(async_responses);
 }
 
 bool thread_db_process::plat_getLWPInfo(lwpid_t, void *) {
@@ -1874,7 +1863,7 @@ bool thread_db_process::plat_supportThreadEvents() {
    return false;
 }
 
-bool thread_db_process::threaddb_setTrackThreads(bool, std::set<std::pair<int_breakpoint *, Address> > &,
+bool thread_db_process::setTrackThreads(bool, std::set<std::pair<int_breakpoint *, Address> > &,
                                                  bool &)
 {
    perr_printf("Error. thread_db not installed on this platform.\n");
@@ -1882,7 +1871,7 @@ bool thread_db_process::threaddb_setTrackThreads(bool, std::set<std::pair<int_br
    return false;
 }
 
-bool thread_db_process::threaddb_isTrackingThreads()
+bool thread_db_process::isTrackingThreads()
 {
    perr_printf("Error. thread_db not installed on this platform.\n");
    setLastError(err_unsupported, "Cannot perform thread operations without thread_db\n");

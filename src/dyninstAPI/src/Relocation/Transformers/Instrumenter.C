@@ -320,10 +320,12 @@ bool Instrumenter::handleCondIndExits(RelocBlock *trace, RelocGraph *cfg, instPo
    
    cfg->makeEdge(new Target<RelocBlock *>(instRelocBlock),
 		 ft->trg->copy(),
+         NULL,
 		 ft->type);
    // Finally, we need a COND_TAKEN from trace to instRelocBlock.
    cfg->makeEdge(new Target<RelocBlock *>(trace),
 		 new Target<RelocBlock *>(instRelocBlock),
+         NULL,
 		 ParseAPI::COND_TAKEN);
 
    return true;
@@ -342,11 +344,12 @@ bool Instrumenter::handleCondDirExits(RelocBlock *trace, RelocGraph *cfg, instPo
    CFWidget::Ptr jcc = CFWidget::create(retcc);
    jcc->clearIsIndirect(); // Will turn this into a straight conditional branch
    jcc->clearIsCall();
-   jcc->clearIsConditional();
+   assert(jcc->isConditional());
    trace->setCF(jcc);
    
    // And the new relocBlock
    RelocBlock *instRelocBlock = RelocBlock::createInst(exit, retcc->addr(), trace->block(), trace->func());
+   retcc->clearIsConditional();
    instRelocBlock->setCF(retcc);
    cfg->addRelocBlockAfter(trace, instRelocBlock);
    
@@ -369,10 +372,12 @@ bool Instrumenter::handleCondDirExits(RelocBlock *trace, RelocGraph *cfg, instPo
 
    cfg->makeEdge(new Target<RelocBlock *>(instRelocBlock),
 		 cond->trg->copy(),
+         NULL, 
 		 ParseAPI::DIRECT);
 
    cfg->makeEdge(new Target<RelocBlock *>(trace),
 		 new Target<RelocBlock *>(instRelocBlock),
+         NULL,
 		 ParseAPI::COND_TAKEN);
 
    cfg->removeEdge(cond);
@@ -491,6 +496,7 @@ bool Instrumenter::funcEntryInstrumentation(RelocBlock *trace, RelocGraph *cfg) 
 
    if (!cfg->makeEdge(new Target<RelocBlock *>(instRelocBlock),
                       new Target<RelocBlock *>(trace),
+                      NULL,
                       ParseAPI::FALLTHROUGH)) return false;
 
    if (!cfg->setSpringboard(trace->block(), trace->func(), instRelocBlock)) return false;

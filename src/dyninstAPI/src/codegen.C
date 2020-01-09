@@ -37,10 +37,7 @@
 #include "addressSpace.h"
 #include "dynThread.h"
 #include "dynProcess.h"
-#include "common/h/Types.h"
-#if defined (os_osf)
-#include <malloc.h>
-#endif
+#include "common/src/Types.h"
 #include "codegen.h"
 #include "util.h"
 #include "function.h"
@@ -49,9 +46,7 @@
 #include "pcrel.h"
 #include "bitArray.h"
 
-#if defined(cap_instruction_api)
 #include "instructionAPI/h/InstructionDecoder.h"
-#endif
 
 #if defined(arch_x86) || defined(arch_x86_64)
 #define CODE_GEN_OFFSET_SIZE 1
@@ -66,6 +61,8 @@ codeGen::codeGen() :
     buffer_(NULL),
     offset_(0),
     size_(0),
+    max_(0),
+    pc_rel_use_count(0),
     emitter_(NULL),
     allocated_(false),
     aSpace_(NULL),
@@ -86,6 +83,8 @@ codeGen::codeGen(unsigned size) :
     buffer_(NULL),
     offset_(0),
     size_(size),
+    max_(size+codeGenPadding),
+    pc_rel_use_count(0),
     emitter_(NULL),
     allocated_(true),
     aSpace_(NULL),
@@ -101,8 +100,9 @@ codeGen::codeGen(unsigned size) :
     inInstrumentation_(false)
 {
     buffer_ = (codeBuf_t *)malloc(size+codeGenPadding);
-    if (!buffer_)
+    if (!buffer_) {
        fprintf(stderr, "%s[%d]: malloc failed: size is %d + codeGenPadding = %d\n", FILE__, __LINE__, size, codeGenPadding);
+	}
     assert(buffer_);
     memset(buffer_, 0, size+codeGenPadding);
 }
@@ -112,6 +112,8 @@ codeGen::codeGen(codeBuf_t *buffer, int size) :
     buffer_(buffer),
     offset_(0),
     size_(size-codeGenPadding),
+    max_(size+codeGenPadding),
+    pc_rel_use_count(0),
     emitter_(NULL),
     allocated_(false),
     aSpace_(NULL),
@@ -139,8 +141,11 @@ codeGen::~codeGen() {
 
 // Deep copy
 codeGen::codeGen(const codeGen &g) :
+    buffer_(NULL),
     offset_(g.offset_),
     size_(g.size_),
+    max_(g.max_),
+    pc_rel_use_count(g.pc_rel_use_count),
     emitter_(NULL),
     allocated_(g.allocated_),
     aSpace_(g.aSpace_),
@@ -161,8 +166,6 @@ codeGen::codeGen(const codeGen &g) :
         buffer_ = (codeBuf_t *) malloc(bufferSize);
         memcpy(buffer_, g.buffer_, bufferSize);
     }
-    else
-        buffer_ = NULL;
 }
 
 bool codeGen::operator==(void *p) const {
@@ -179,6 +182,7 @@ codeGen &codeGen::operator=(const codeGen &g) {
     offset_ = g.offset_;
     size_ = g.size_;
     max_ = g.max_;
+    pc_rel_use_count = g.pc_rel_use_count;
     allocated_ = g.allocated_;
     thr_ = g.thr_;
     isPadded_ = g.isPadded_;
@@ -218,18 +222,8 @@ void codeGen::allocate(unsigned size)
    allocated_ = true;
    if (!buffer_) {
       fprintf(stderr, "%s[%d]:  malloc (%d) failed: %s\n", FILE__, __LINE__, size, strerror(errno));
-#if defined (os_osf)
-    //struct mallinfo my_mallinfo  = mallinfo();
-    //extern struct mallinfo = mallinfo();
-    fprintf(stderr, "malloc info:\n");
-    fprintf(stderr, "\t arena = %d\n", mallinfo().arena);
-    fprintf(stderr, "\t ordblocks = %d\n", mallinfo().ordblks);
-    fprintf(stderr, "\t free ordblocks = %d\n", mallinfo().fordblks);
-    fprintf(stderr, "\t smblocks = %d\n", mallinfo().smblks);
-    fprintf(stderr, "\t free smblocks = %d\n", mallinfo().fsmblks);
-#endif
-    }
-    assert(buffer_);
+   }
+   assert(buffer_);
 }
 
 // Very similar to destructor
@@ -773,7 +767,7 @@ std::string codeGen::format() const {
    Instruction::Ptr insn = deco.decode();
    ret << hex;
    while(insn) {
-     ret << "\t" << base << ": " << insn->format(base) << " / " << *((unsigned *)insn->ptr()) << endl;
+     ret << "\t" << base << ": " << insn->format(base) << " / " << *((const unsigned *)insn->ptr()) << endl;
       base += insn->size();
       insn = deco.decode();
    }

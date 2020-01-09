@@ -33,8 +33,8 @@
 #if !defined(_R_SPRINGBOARD_H_)
 #define _R_SPRINGBOARD_H_
 #include <map>
-#include "common/h/IntervalTree.h"
-#include "dynutil/h/dyntypes.h"
+#include "common/src/IntervalTree.h"
+#include "common/h/dyntypes.h"
 #include "Transformers/Transformer.h" // Priority enum
 #include "dyninstAPI/src/codegen.h"
 
@@ -66,6 +66,7 @@ struct SpringboardReq {
 
    Address from;
    Priority priority;
+   func_instance *func;
    block_instance *block;
    Destinations destinations;
    bool checkConflicts;
@@ -83,6 +84,7 @@ struct SpringboardReq {
                   bool useTrap_)
    : from(from_), 
       priority(priority_),
+      func(func_),
       block(block_),
       checkConflicts(checkConflicts_), 
       includeRelocatedCopies(includeRelocCopies_),
@@ -92,7 +94,8 @@ struct SpringboardReq {
       destinations[func_] = to_;
    }
 SpringboardReq() 
-: from(0), priority(NotRequired), 
+: from(0), priority(NotRequired),
+      func(NULL), 
       block(NULL),
       checkConflicts(false),
       includeRelocatedCopies(false),
@@ -115,6 +118,7 @@ SpringboardReq()
             // New version version
             assert(destinations.empty()); 
             from = from_;
+            func = func_;
             block = block_;
             priority = priority_;
             destinations[func_] = to_;
@@ -185,6 +189,73 @@ class SpringboardBuilder;
    Springboards sBoardMap_;
  };
 
+ // Persistent tracking of things that have already gotten springboards across multiple
+ // calls to AddressSpace::relocateInt() and thus across multiple SpringboardFoo,
+ // CodeTracker, CodeMover objects.
+
+struct SpringboardInfo {
+    int val;
+    func_instance *func;
+    Priority priority;
+
+    SpringboardInfo(int v, func_instance* f) : val(v), func(f), priority(MIN_PRIORITY) {}
+    SpringboardInfo(int v, func_instance* f, Priority p) : val(v), func(f), priority(p) {}
+};
+
+class InstalledSpringboards
+{
+ public:
+  typedef boost::shared_ptr<InstalledSpringboards> Ptr;
+  static const int Allocated;
+  static const int UnallocatedStart;
+ InstalledSpringboards() : nextFuncID_(UnallocatedStart) 
+  {
+  }
+  
+  
+
+  template <typename BlockIter> 
+  bool addBlocks(func_instance* func, BlockIter begin, BlockIter end);
+  bool addFunc(func_instance* f);
+  bool conflict(Address start, Address end, bool inRelocatedCode, func_instance* func, Priority p);
+  bool conflictInRelocated(Address start, Address end);
+
+  void registerBranch(Address start, Address end, const SpringboardReq::Destinations &dest, bool inRelocatedCode, func_instance* func, Priority p);
+  void registerBranchInRelocated(Address start, Address end, func_instance* func, Priority p);
+  bool forceTrap(Address a) 
+  {
+    return relocTraps_.find(a) != relocTraps_.end();
+  }
+
+    
+  
+ private:
+  int nextFuncID_;
+  // tracks relocation addresses that need trap-based springboards
+  std::set<Address> relocTraps_; 
+  
+
+  // We don't really care about the payload; I just want an "easy to look up"
+  // range data structure. 
+  // Map this to an int because IntervalTree collapses similar ranges. Punks.
+  IntervalTree<Address, SpringboardInfo*> validRanges_;
+
+  // If we consume NOP-padding between functions to get room for a jump, that
+  // padding may not exist in the relocation buffer.  Remember such ranges so
+  // we can deal with that in reinstrumentation, if only to force a trap.
+  IntervalTree<Address, SpringboardInfo*> paddingRanges_;
+
+  // Like the previous, but for branches we put in relocated code. We
+  // assume anything marked as "in relocated code" is a valid thing to write
+  // to, since relocation size is >= original size. However, we still don't
+  // want overlapping branches. 
+  IntervalTree<Address, SpringboardInfo*> overwrittenRelocatedCode_;
+  void debugRanges();
+  
+};
+ 
+ 
+
 class SpringboardBuilder {
   typedef enum {
     Failed,
@@ -195,21 +266,13 @@ class SpringboardBuilder {
   typedef boost::shared_ptr<SpringboardBuilder> Ptr;
   typedef std::set<func_instance *> FuncSet;
 
-  template <typename RelocBlockIter> 
-    static Ptr create(RelocBlockIter begin, RelocBlockIter end, AddressSpace *addrSpace); 
   static Ptr createFunc(FuncSet::const_iterator begin, FuncSet::const_iterator end, AddressSpace *addrSpace);
 
   bool generate(std::list<codeGen> &springboards,
 		SpringboardMap &input);
 
  private:
-
-  static const int Allocated;
-  static const int UnallocatedStart;
-
- SpringboardBuilder(AddressSpace *a) : addrSpace_(a), curRange_(UnallocatedStart) {};
-  template <typename BlockIter> 
-     bool addBlocks(BlockIter begin, BlockIter end, int funcID);
+  SpringboardBuilder(AddressSpace *a);
 
   bool generateInt(std::list<codeGen> &springboards,
                    SpringboardMap &input,
@@ -230,40 +293,27 @@ class SpringboardBuilder {
 			    const SpringboardReq &p,
 			    bool useTrap);
 
-  bool conflict(Address start, Address end, bool inRelocatedCode);
-  bool conflictInRelocated(Address start, Address end);
-
-  void registerBranch(Address start, Address end, const SpringboardReq::Destinations &dest, bool inRelocatedCode);
-  void registerBranchInRelocated(Address start, Address end);
 
   void addMultiNeeded(const SpringboardReq &p);
 
   void generateBranch(Address from, Address to, codeGen &input);
   void generateTrap(Address from, Address to, codeGen &input);
 
+  bool conflict(Address start, Address end, bool inRelocatedCode, func_instance* func, Priority p) { return installed_springboards_->conflict(start, end, inRelocatedCode, func, p); }
+
+  void registerBranch(Address start, Address end, const SpringboardReq::Destinations &dest, bool inRelocatedCode, func_instance* func, Priority p)
+  {
+    return installed_springboards_->registerBranch(start, end, dest, inRelocatedCode, func, p);
+  }
+
   bool isLegalShortBranch(Address from, Address to);
   Address shortBranchBack(Address from);
 
-  void debugRanges();
 
   AddressSpace *addrSpace_;
 
-  // tracks relocation addresses that need trap-based springboards
-  static std::set<Address> relocTraps_; 
+  InstalledSpringboards::Ptr installed_springboards_;
   
-
-  // We don't really care about the payload; I just want an "easy to look up"
-  // range data structure. 
-  // Map this to an int because IntervalTree collapses similar ranges. Punks.
-  IntervalTree<Address, int> validRanges_;
-  int curRange_;
-
-  // Like the previous, but for branches we put in relocated code. We
-  // assume anything marked as "in relocated code" is a valid thing to write
-  // to, since relocation size is >= original size. However, we still don't
-  // want overlapping branches. 
-  IntervalTree<Address, bool> overwrittenRelocatedCode_;
-
   std::list<SpringboardReq> multis_;
 
 };

@@ -28,8 +28,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "dynutil/h/dyn_regs.h"
-#include "dynutil/h/dyntypes.h"
+#include "common/h/dyn_regs.h"
+#include "common/h/dyntypes.h"
 #include "proccontrol/h/PCErrors.h"
 #include "proccontrol/h/Generator.h"
 #include "proccontrol/h/Event.h"
@@ -41,8 +41,15 @@
 #include "proccontrol/src/freebsd.h"
 #include "proccontrol/src/int_handler.h"
 #include "proccontrol/src/int_event.h"
-#include "common/h/freebsdKludges.h"
+#include "common/src/freebsdKludges.h"
+
+#if defined(WITH_SYMLITE)
 #include "symlite/h/SymLite-elf.h"
+#elif defined(WITH_SYMTAB_API)
+#include "symtabAPI/h/SymtabReader.h"
+#else
+#error "No defined symbol reader"
+#endif
 
 #include <iostream>
 
@@ -1745,12 +1752,18 @@ bool freebsd_process::plat_individualRegAccess()
 
 SymbolReaderFactory *freebsd_process::plat_defaultSymReader()
 {
+#if defined(WITH_SYMLITE)
   static SymbolReaderFactory *symreader_factory = NULL;
   if (symreader_factory)
     return symreader_factory;
 
   symreader_factory = (SymbolReaderFactory *) new SymElfFactory();
   return symreader_factory;
+#elif defined(WITH_SYMTAB_API)
+  return SymtabAPI::getSymtabReaderFactory();
+#else
+#error "No defined symbol reader"
+#endif
 }
 
 bool freebsd_process::plat_threadOpsNeedProcStop()

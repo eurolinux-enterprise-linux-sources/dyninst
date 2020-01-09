@@ -121,6 +121,7 @@ void DYNINSTbreakPoint()
 static int failed_breakpoint = 0;
 void uncaught_breakpoint(int sig)
 {
+   (void)sig; /* unused parameter */
    failed_breakpoint = 1;
 }
 
@@ -215,22 +216,6 @@ void mark_heaps_exec() {
  * OS initialization function
 ************************************************************************/
 int DYNINST_sysEntry;
-void DYNINSTos_init(int calledByFork, int calledByAttach)
-{
-   RTprintf("DYNINSTos_init(%d,%d)\n", calledByFork, calledByAttach);
-#if defined(arch_x86)
-   /**
-    * The following line reads the vsyscall entry point directly from
-    * it's stored, which can then be used by the mutator to locate
-    * the vsyscall page.
-    * The problem is, I don't know if this memory read is valid on
-    * older systems--It could cause a segfault.  I'm going to leave
-    * it commented out for now, until further investigation.
-    * -Matt 1/18/06
-    **/
-   //__asm("movl %%gs:0x10, %%eax\n" : "=r" (DYNINST_sysEntry))
-#endif
-}
 
 #if !defined(DYNINST_RT_STATIC_LIB)
 /*
@@ -367,6 +352,7 @@ dyntid_t dyn_pthread_self()
    platform-ness here. 
 */
 int DYNINST_am_initial_thread( dyntid_t tid ) {
+	(void)tid; /* unused parameter */
 	if( dyn_lwp_self() == getpid() ) {
 		return 1;
    }
@@ -389,16 +375,16 @@ int DYNINST_am_initial_thread( dyntid_t tid ) {
   #endif // amd-64
 #elif defined(arch_power)
   #if defined(arch_64bit)
-    #define UC_PC(x) x->uc_mcontext.gp_regs[32]
+    #define UC_PC(x) x->uc_mcontext.regs->gpr[32]
   #else // 32-bit
     #define UC_PC(x) x->uc_mcontext.uc_regs->gregs[32]
   #endif // power
 #endif // UC_PC
 
-extern unsigned long dyninstTrapTableUsed;
-extern unsigned long dyninstTrapTableVersion;
-extern trapMapping_t *dyninstTrapTable;
-extern unsigned long dyninstTrapTableIsSorted;
+extern volatile unsigned long dyninstTrapTableUsed;
+extern volatile unsigned long dyninstTrapTableVersion;
+extern volatile trapMapping_t *dyninstTrapTable;
+extern volatile unsigned long dyninstTrapTableIsSorted;
 
 /**
  * This comment is now obsolete, left for historic purposes
@@ -429,6 +415,8 @@ void dyninstTrapHandler(int sig, siginfo_t *sg, ucontext_t *context)
 {
    void *orig_ip;
    void *trap_to;
+   (void)sig; /* unused parameter */
+   (void)sg; /* unused parameter */
 
    orig_ip = (void *) UC_PC(context);
    assert(orig_ip);
@@ -438,18 +426,18 @@ void dyninstTrapHandler(int sig, siginfo_t *sg, ucontext_t *context)
       unsigned long one = 1;
       struct trap_mapping_header *hdr = getStaticTrapMap((unsigned long) orig_ip);
       assert(hdr);
-      trapMapping_t *mapping = &(hdr->traps[0]);
+      volatile trapMapping_t *mapping = &(hdr->traps[0]);
       trap_to = dyninstTrapTranslate(orig_ip,
                                      (unsigned long *) &hdr->num_entries, 
                                      &zero, 
-                                     (volatile trapMapping_t **) &mapping,
+                                     &mapping,
                                      &one);
    }
    else {
       trap_to = dyninstTrapTranslate(orig_ip, 
                                      &dyninstTrapTableUsed,
                                      &dyninstTrapTableVersion,
-                                     (volatile trapMapping_t **) &dyninstTrapTable,
+                                     &dyninstTrapTable,
                                      &dyninstTrapTableIsSorted);
                                      
    }
@@ -459,7 +447,10 @@ void dyninstTrapHandler(int sig, siginfo_t *sg, ucontext_t *context)
 #if defined(cap_binary_rewriter)
 
 extern struct r_debug _r_debug;
-struct r_debug _r_debug __attribute__ ((weak));
+DLLEXPORT struct r_debug _r_debug __attribute__ ((weak));
+
+/* Verify that the r_debug variable is visible */
+void r_debugCheck() { assert(_r_debug.r_map); }
 
 #define NUM_LIBRARIES 512 //Important, max number of rewritten libraries
 
@@ -504,6 +495,7 @@ static struct trap_mapping_header *getStaticTrapMap(unsigned long addr)
       assert(i >= 0 && i <= NUM_LIBRARIES);
       if (i == NUM_LIBRARIES) {
          header = NULL;
+         rtdebug_printf("%s[%d]:  getStaticTrapMap: returning NULL\n", __FILE__, __LINE__);
          goto done;
       }
       header = all_headers[i];
@@ -521,8 +513,10 @@ static int parse_libs()
    struct link_map *l_current;
 
    l_current = _r_debug.r_map;
-   if (!l_current)
-      return -1;
+   if (!l_current) {
+        rtdebug_printf("%s[%d]:  parse_libs: _r_debug.r_map was not set\n", __FILE__, __LINE__);
+       return -1;
+   }
 
    clear_bitmask(all_headers_current);
    while (l_current) {
@@ -577,7 +571,7 @@ static int parse_link_map(struct link_map *l)
    }
 
    new_pos = get_next_free_bitmask(all_headers_last, -1);
-   assert(new_pos >= 0 && new_pos < NUM_LIBRARIES);
+   assert(new_pos < NUM_LIBRARIES);
    if (new_pos == NUM_LIBRARIES)
       return ERROR_FULL;
 
@@ -674,6 +668,7 @@ static unsigned get_next_set_bitmask(unsigned *bit_mask, int last_pos) {
 #endif
 
 
+
 #endif /* cap_mutatee_traps */
 
 #if defined(cap_binary_rewriter) && !defined(DYNINST_RT_STATIC_LIB)
@@ -685,10 +680,12 @@ static unsigned get_next_set_bitmask(unsigned *bit_mask, int last_pos) {
  * the binary. Leaving this code in would create a global constructor for the
  * function runDYNINSTBaseInit(). See DYNINSTglobal_ctors_handler.
  */ 
+extern void r_debugCheck();
 extern void DYNINSTBaseInit();
 void runDYNINSTBaseInit() __attribute__((constructor));
 void runDYNINSTBaseInit()
 {
+    r_debugCheck();
    DYNINSTBaseInit();
 }
 #endif

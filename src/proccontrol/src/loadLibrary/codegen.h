@@ -38,24 +38,28 @@ class Codegen {
 
 #if defined(os_linux)
    Address buildLinuxArgStruct(Address libbase, unsigned mode);
-   bool generateStackUnprotect();
+   bool generateStackUnprotect(Address var, Address mprotect);
 #endif
 
    bool generateCall(Address addr, const std::vector<Address> &args);
 
    bool generateCallIA32(Address addr, const std::vector<Address> &args);
    bool generateCallAMD64(Address addr, const std::vector<Address> &args);
+
    bool generateCallPPC32(Address addr, const std::vector<Address> &args);
    bool generateCallPPC64(Address addr, const std::vector<Address> &args);
+
 
    bool generatePreamble();
    bool generatePreambleIA32();
    bool generatePreambleAMD64();
+
    bool generatePreamblePPC32();
    bool generatePreamblePPC64();
 
    void generatePPC32(Address val, unsigned reg);
    void generatePPC64(Address val, unsigned reg);
+
 
    bool generateTrap();
    bool generateNoops();

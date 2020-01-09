@@ -136,7 +136,12 @@ void windows_process::plat_setHandles(HANDLE hp, HANDLE hf, Address eb)
 	hfile = hf;
 	execBase = eb;
 	std::string fileName;
-    void *pmap = NULL;
+#if 1 // vista or greater
+	char filename[MAX_PATH+1];
+	int bytes_obtained = GetFinalPathNameByHandle(hf, filename, MAX_PATH, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+	if(bytes_obtained < MAX_PATH) fileName = std::string(filename+4); // skip \\?\ 
+#else
+	void *pmap = NULL;
     HANDLE fmap = CreateFileMapping(hfile, NULL, 
                                     PAGE_READONLY, 0, 1, NULL);
     if (fmap) {
@@ -150,7 +155,8 @@ void windows_process::plat_setHandles(HANDLE hp, HANDLE hf, Address eb)
         }
         CloseHandle(fmap);
     }
-    m_executable = new int_library(fileName, false, execBase, execBase);
+#endif
+	m_executable = new int_library(fileName, false, execBase, execBase);
 
 }
 
@@ -284,9 +290,7 @@ bool windows_process::plat_encodeMemoryRights(Process::mem_perm perm,
 }
 
 bool windows_process::plat_getMemoryAccessRights(Dyninst::Address addr,
-                                                 size_t size,
                                                  Process::mem_perm& perm) {
-    (void) size;
     MEMORY_BASIC_INFORMATION meminfo;
     memset(&meminfo, 0, sizeof(MEMORY_BASIC_INFORMATION));
     if (!VirtualQueryEx(hproc, (LPCVOID)addr, &meminfo,
@@ -838,4 +842,9 @@ void windows_process::setPendingDebugBreak() {
 void windows_process::clearPendingDebugBreak() {
 	pthrd_printf("win_proc: clearing pending debug break\n");
 	pendingDebugBreak_ = false;
+}
+
+std::string int_process::plat_canonicalizeFileName(std::string path)
+{
+   return path;
 }

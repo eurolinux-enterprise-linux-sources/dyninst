@@ -35,7 +35,7 @@
 
 #include <assert.h>
 #include <stdio.h>
-#include "common/h/Types.h"
+#include "common/src/Types.h"
 #include "dyninstAPI/src/codegen.h"
 #include "dyninstAPI/src/function.h"
 #include "dyninstAPI/src/emit-x86.h"
@@ -60,6 +60,41 @@ const int EmitterIA32::mt_offset = -4;
 #if defined(arch_x86_64)
 const int EmitterAMD64::mt_offset = -8;
 #endif
+
+static void emitXMMRegsSaveRestore(codeGen& gen, bool isRestore)
+{
+   GET_PTR(insn, gen);
+   for(int reg = 0; reg <= 7; ++reg)
+   {
+     registerSlot* r = (*gen.rs())[(REGNUM_XMM0 + reg)];
+     if( r && r->liveState == registerSlot::dead) 
+     {
+       continue;
+     }
+     unsigned char offset = reg * 16;
+     *insn++ = 0x66; *insn++ = 0x0f; 
+     // 6f to save, 7f to restore
+     if(isRestore) 
+     {
+       *insn++ = 0x6f;
+     }
+     else
+     {
+       *insn++ = 0x7f;
+     }
+     
+     if (reg == 0) {
+       *insn++ = 0x00;
+     }
+     else {
+       unsigned char modrm = 0x40 + (0x8 * reg);
+       *insn++ = modrm;
+       *insn++ = offset;
+     }
+   }
+   SET_PTR(insn, gen);
+}
+
 
 bool EmitterIA32::emitMoveRegToReg(Register src, Register dest, codeGen &gen) {
    RealRegister src_r = gen.rs()->loadVirtual(src, gen);
@@ -699,13 +734,11 @@ bool EmitterIA32::emitBTRestores(baseTramp* bt,codeGen &gen)
     bool useFPRs;
     bool createFrame;
     bool saveOrigAddr;
-    bool localSpace;
     bool alignStack;
     if (bt) {
        useFPRs = bt->savedFPRs;
        createFrame = bt->createdFrame;
        saveOrigAddr = bt->savedOrigAddr;
-       localSpace = bt->createdLocalSpace;
        alignStack = bt->alignedStack;
     }
     else {
@@ -716,7 +749,6 @@ bool EmitterIA32::emitBTRestores(baseTramp* bt,codeGen &gen)
                   !bt->makesCall() );
        createFrame = true;
        saveOrigAddr = bt->instP();
-       localSpace = true;
        alignStack = true;
     }
 
@@ -1676,14 +1708,27 @@ Register EmitterAMD64::emitCall(opCode op, codeGen &gen, const pdvector<AstNodeP
       bitArray regsClobberedByCall = ABI::getABI(8)->getCallWrittenRegisters();
       for (int i = 0; i < gen.rs()->numGPRs(); i++) {
          registerSlot *reg = gen.rs()->GPRs()[i];
+         Register r = reg->encoding();
+         static LivenessAnalyzer live(8);
+         bool callerSave = 
+            regsClobberedByCall.test(live.getIndex(regToMachReg64.equal_range(r).first->second));
+         if (!callerSave) {
+            // We don't care!
+            regalloc_printf("%s[%d]: pre-call, skipping callee-saved register %d\n", FILE__, __LINE__,
+                     reg->number);
+            continue;
+         }
+
          regalloc_printf("%s[%d]: pre-call, register %d has refcount %d, keptValue %d, liveState %s\n",
                          FILE__, __LINE__, reg->number,
                          reg->refCount,
                          reg->keptValue,
                          (reg->liveState == registerSlot::live) ? "live" : ((reg->liveState == registerSlot::spilled) ? "spilled" : "dead"));
+
          if (reg->refCount > 0 ||  // Currently active
              reg->keptValue || // Has a kept value
              (reg->liveState == registerSlot::live)) { // needs to be saved pre-call
+            regalloc_printf("%s[%d]: \tsaving reg\n", FILE__, __LINE__);
             pair<unsigned, unsigned> regToSave;
             regToSave.first = reg->number;
             
@@ -1702,8 +1747,6 @@ Register EmitterAMD64::emitCall(opCode op, codeGen &gen, const pdvector<AstNodeP
             reg->keptValue = false;
          }
          else {
-            Register r = reg->encoding();
-	    static LivenessAnalyzer live(8);
 	    // mapping from Register to MachRegister, then to index in liveness bitArray
 	    if (regsClobberedByCall.test(live.getIndex(regToMachReg64.equal_range(r).first->second))){	  
                gen.markRegDefined(r);
@@ -2468,6 +2511,7 @@ bool EmitterAMD64::emitBTSaves(baseTramp* bt,  codeGen &gen)
    extra_space_check = extra_space;
 
 
+   bool needFXsave = false;
    if (useFPRs) {
       // need to save the floating point state (x87, MMX, SSE)
       // Since we're guarenteed to be at least 16-byte aligned
@@ -2476,16 +2520,50 @@ bool EmitterAMD64::emitBTSaves(baseTramp* bt,  codeGen &gen)
       //   fxsave (%rsp)           ; 0x0f 0xae 0x04 0x24
 
       // Change to REGET if we go back to magic LEA emission
-      GET_PTR(buffer, gen);
-      *buffer++ = 0x0f;
-      *buffer++ = 0xae;
-      *buffer++ = 0x04;
-      *buffer++ = 0x24;
-      SET_PTR(buffer, gen);
+     
+     for(auto curReg = gen.rs()->FPRs().begin();
+	 curReg != gen.rs()->FPRs().end();
+	 ++curReg)
+     {
+       if((*curReg)->liveState != registerSlot::dead)
+       {
+	 switch ((*curReg)->number) 
+	 {
+	 case REGNUM_XMM0:
+	 case REGNUM_XMM1:
+	 case REGNUM_XMM2:
+	 case REGNUM_XMM3:
+	 case REGNUM_XMM4:
+	 case REGNUM_XMM5:
+	 case REGNUM_XMM6:
+	 case REGNUM_XMM7:
+	   continue;
+	 default:
+	   needFXsave = true;
+	   break;
+	 }
+       }
+     }
+     
+     if(needFXsave)
+     {
+       GET_PTR(buffer, gen);
+       *buffer++ = 0x0f;
+       *buffer++ = 0xae;
+       *buffer++ = 0x04;
+       *buffer++ = 0x24;
+       SET_PTR(buffer, gen);
+     } else 
+     {
+       emitMovRegToReg64(REGNUM_RAX, REGNUM_RSP, true, gen);
+       emitXMMRegsSaveRestore(gen, false);
+     }
    }
 
    if (bt) {
       bt->savedFPRs = useFPRs;
+      bt->wasFullFPRSave = needFXsave;
+      
       bt->createdFrame = createFrame;
       bt->savedOrigAddr = saveOrigAddr;
       bt->createdLocalSpace = false;
@@ -2531,12 +2609,21 @@ bool EmitterAMD64::emitBTRestores(baseTramp* bt, codeGen &gen)
    if (useFPRs) {
       // restore saved FP state
       // fxrstor (%rsp) ; 0x0f 0xae 0x04 0x24
-      GET_PTR(buffer, gen);
-      *buffer++ = 0x0f;
-      *buffer++ = 0xae;
-      *buffer++ = 0x0c;
-      *buffer++ = 0x24;
-      SET_PTR(buffer, gen);
+     if(bt && bt->wasFullFPRSave)
+     {
+       GET_PTR(buffer, gen);
+       *buffer++ = 0x0f;
+       *buffer++ = 0xae;
+       *buffer++ = 0x0c;
+       *buffer++ = 0x24;
+       SET_PTR(buffer, gen);
+     }
+     else
+     {
+       emitMovRegToReg64(REGNUM_RAX, REGNUM_RSP, true, gen);
+       emitXMMRegsSaveRestore(gen, true);
+     }
+     
    }
 
    int extra_space = gen.rs()->getStackHeight();

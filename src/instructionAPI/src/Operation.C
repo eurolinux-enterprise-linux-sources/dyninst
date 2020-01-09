@@ -30,15 +30,15 @@
 
 #define INSIDE_INSTRUCTION_API
 
-#include "common/h/Types.h"
+#include "common/src/Types.h"
 
 #include "Operation.h"
-#include "common/h/arch-x86.h"
+#include "common/src/arch-x86.h"
 #include "entryIDs.h"
-#include "common/h/Singleton.h"
+#include "common/src/Singleton.h"
 #include "Register.h"
 #include <map>
-#include "common/h/singleton_object_pool.h"
+#include "common/src/singleton_object_pool.h"
 
 using namespace NS_x86;
 #include "BinaryFunction.h"
@@ -170,7 +170,11 @@ namespace Dyninst
     Operation::Operation()
     {
       operationID = e_No_Entry;
+      doneOtherSetup = false;
+      doneFlagsSetup = false;
+      archDecodedFrom = Arch_none;
       prefixID = prefix_none;
+      addrWidth = u64;
     }
     
     const Operation::registerSet&  Operation::implicitReads() const

@@ -48,9 +48,9 @@
 #include "Symbol.h"
 #include "Symtab.h"
 #include "LineInformation.h"
-#include "common/h/headers.h"
-#include "common/h/MappedFile.h"
-#include "common/h/lprintf.h"
+#include "common/src/headers.h"
+#include "common/src/MappedFile.h"
+#include "common/src/lprintf.h"
 
 namespace Dyninst{
 namespace SymtabAPI{
@@ -77,7 +77,6 @@ const char MULTIPLE_WILDCARD_CHARACTER = '*';
 
 class AObject {
 public:
-    SYMTAB_EXPORT AObject() {};
     SYMTAB_EXPORT unsigned nsymbols () const;
     
     SYMTAB_EXPORT bool get_symbols( std::string & name, std::vector< Symbol *> & symbols);
@@ -140,15 +139,11 @@ public:
 
     // Only implemented for ELF right now
     SYMTAB_EXPORT virtual void getSegmentsSymReader(std::vector<SymSegment> &) {};
-
+	SYMTAB_EXPORT virtual void rebase(Offset) {};
 protected:
     SYMTAB_EXPORT virtual ~AObject();
     // explicitly protected
     SYMTAB_EXPORT AObject(MappedFile *, void (*err_func)(const char *));
-    SYMTAB_EXPORT AObject(MappedFile *, 
-                      dyn_hash_map<std::string, LineInformation> &, 
-                      void (*)(const char *)) { assert(0); }
-    SYMTAB_EXPORT AObject(const AObject &obj);
 
     MappedFile *mf;
 
@@ -201,6 +196,9 @@ private:
     friend class SymbolIter;
     friend class Symtab;
 
+    // declared but not implemented; no copying allowed
+    AObject(const AObject &obj);
+    const AObject& operator=(const AObject &obj);
 };
 
 }//namepsace Symtab
@@ -212,8 +210,6 @@ private:
 
 #if defined(os_linux) || defined(os_bg) || defined(os_freebsd) || defined(os_vxworks)
 #include "Object-elf.h"
-#elif defined(os_aix)
-#include "Object-xcoff.h"
 #elif defined(os_windows)
 #include "Object-nt.h"
 #else

@@ -44,7 +44,10 @@ LinkMap::LinkMap() :
     gotRegionOffset(0), gotSize(0), gotRegionAlign(0),
     ctorDtorHandler(NULL), ctorRegionOffset(0), ctorSize(0),
     ctorRegionAlign(0), originalCtorRegion(NULL), dtorRegionOffset(0),
-    dtorSize(0), dtorRegionAlign(0), originalDtorRegion(NULL) 
+    dtorSize(0), dtorRegionAlign(0), originalDtorRegion(NULL),
+    pltRegionOffset(0), pltSize(0), pltRegionAlign(0),
+    relRegionOffset(0), relSize(0), relRegionAlign(0),
+    relGotRegionOffset(0), relGotSize(0), relGotRegionAlign(0)
 {
 }
 
@@ -141,8 +144,8 @@ void LinkMap::printAll(ostream &os, Offset globalOffset) {
             printRegionFromInfo(os, originalCtorRegion, 0, 0);
         }
 
-        vector<Region *>::iterator reg_it;
-        for(reg_it = newCtorRegions.begin(); reg_it != newCtorRegions.end(); ++reg_it) {
+        for(auto reg_it = newCtorRegions.begin(); 
+	    reg_it != newCtorRegions.end(); ++reg_it) {
             printRegion(os, *reg_it, globalOffset);
         }
 
@@ -159,8 +162,8 @@ void LinkMap::printAll(ostream &os, Offset globalOffset) {
             printRegionFromInfo(os, originalDtorRegion, 0, 0);
         }
 
-        vector<Region *>::iterator reg_it;
-        for(reg_it = newDtorRegions.begin(); reg_it != newDtorRegions.end(); ++reg_it) {
+        for(auto reg_it = newDtorRegions.begin(); 
+	    reg_it != newDtorRegions.end(); ++reg_it) {
             printRegion(os, *reg_it, globalOffset);
         }
 

@@ -28,20 +28,20 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "common/h/std_namesp.h"
+#include "common/src/std_namesp.h"
 #include <iomanip>
 #include <string>
-#include "common/h/headers.h"
+#include "common/src/headers.h"
 #include "dyninstAPI/src/os.h"
 #include "dyninstAPI/src/addressSpace.h"
-#include "common/h/stats.h"
-#include "common/h/Types.h"
+#include "common/src/stats.h"
+#include "common/src/Types.h"
 #include "dyninstAPI/src/debug.h"
 #include "dyninstAPI/src/instPoint.h"
-#include "common/h/ntHeaders.h"
+#include "common/src/ntHeaders.h"
 #include "dyninstAPI/src/mapped_object.h"
 #include "dyninstAPI/src/emit-x86.h"
-#include "common/h/arch.h"
+#include "common/src/arch.h"
 #include "dyninstAPI/src/inst-x86.h"
 #include "dyninstAPI/src/registerSpace.h"
 #include "image.h"
@@ -58,6 +58,8 @@
 #include "BPatch_process.h"
 #include "nt_signal_emul.h"
 #include "dyninstAPI/src/PCEventMuxer.h"
+
+#define snprintf _snprintf
 
 // prototypes of functions used in this file
 
@@ -323,9 +325,8 @@ static bool decodeAccessViolation_defensive(EventRecord &ev, bool &wait_until_ac
 void OS::osDisconnect(void) {
 }
 
-bool PCProcess::getMemoryAccessRights(Address addr, size_t size,
-                                      PCMemPerm& rights) {
-    if(!pcProc_->getMemoryAccessRights(addr, size, rights)) {
+bool PCProcess::getMemoryAccessRights(Address addr, PCMemPerm& rights) {
+    if(!pcProc_->getMemoryAccessRights(addr, rights)) {
 	    mal_printf("ERROR: failed to get access rights for page %lx, %s[%d]\n",
                    addr, FILE__, __LINE__);
         return false;
@@ -1077,8 +1078,7 @@ bool PCEventMuxer::useCallback(Dyninst::ProcControlAPI::EventType et)
         case Dyninst::ProcControlAPI::EventType::Exit:
             switch(et.time()) {
                 case Dyninst::ProcControlAPI::EventType::Pre:
-                case Dyninst::ProcControlAPI::EventType::Post:
-					return true;
+		  return true;
                 default:
                     break;
             }
@@ -1086,7 +1086,7 @@ bool PCEventMuxer::useCallback(Dyninst::ProcControlAPI::EventType et)
 		case Dyninst::ProcControlAPI::EventType::LWPDestroy:
             switch(et.time()) {
                 case Dyninst::ProcControlAPI::EventType::Pre:
-					return true;
+		  return true;
                 default:
                     break;
             }
@@ -1098,7 +1098,11 @@ bool PCEventMuxer::useCallback(Dyninst::ProcControlAPI::EventType et)
 
 bool PCEventMuxer::useBreakpoint(Dyninst::ProcControlAPI::EventType et)
 {
-	return false;
+//  if(et.code() == Dyninst::ProcControlAPI::EventType::Exit &&
+//     et.time() == Dyninst::ProcControlAPI::EventType::Pre)
+//    return true;
+  
+  return false;
 }
 
 bool PCEventHandler::isKillSignal(int signal)

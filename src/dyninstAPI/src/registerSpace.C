@@ -178,50 +178,27 @@ registerSpace *registerSpace::actualRegSpace(instPoint *iP)
     return conservativeRegSpace(iP->proc());
 }
 
-void registerSpace::overwriteRegisterSpace(Register,
-                                           Register) {
-    // This should _NOT_ be used; it's defined to catch errors.
-    assert(0);
-}
-
-// Ugly IA-64-age.
-void registerSpace::overwriteRegisterSpace64(Register first,
-                                             Register last) {
-    delete globalRegSpace64_;
-    globalRegSpace64_ = new registerSpace();
-    
-    pdvector<registerSlot *> regs;
-    for (unsigned i = first; i <= last; i++) {
-        char buf[128];
-        sprintf(buf, "reg%d", i);
-        regs.push_back(new registerSlot(i,
-                                        buf,
-                                        false,
-                                        registerSlot::deadAlways,
-                                        registerSlot::GPR));
-    }
-    createRegSpaceInt(regs, globalRegSpace64_);
-}
-
 
 registerSpace::registerSpace() :
+    pc_rel_reg(0),
+    pc_rel_use_count(0),
+    instFrameSize_(0),
     savedFlagSize(0),
     currStackPointer(0),
-    registers_(uiHash),
     addr_width(0)
 {
 }
 
 registerSpace::~registerSpace()
 {
-    for (regDictIter i = registers_.begin(); i != registers_.end(); i++) {
-        delete i.currval();
+    for (auto i = registers_.begin(); i != registers_.end(); i++) {
+       delete i->second;
     }
 }
 
 void registerSpace::createRegisterSpace(pdvector<registerSlot *> &registers) {
     // We need to initialize the following:
-    // registers_ (dictionary_hash)
+    // registers_ (std::unordered_map)
     // GPRs_ (vector of pointers to elements in registers_
     // FPRs_ (vector of pointers ...)
     // SPRs_ (...)
@@ -235,7 +212,7 @@ void registerSpace::createRegisterSpace(pdvector<registerSlot *> &registers) {
 
 void registerSpace::createRegisterSpace64(pdvector<registerSlot *> &registers) {
     // We need to initialize the following:
-    // registers_ (dictionary_hash)
+    // registers_ (std::unordered_map)
     // GPRs_ (vector of pointers to elements in registers_
     // FPRs_ (vector of pointers ...)
     // SPRs_ (...)
@@ -290,27 +267,26 @@ void registerSpace::createRegSpaceInt(pdvector<registerSlot *> &registers,
 bool registerSpace::trySpecificRegister(codeGen &gen, Register num, 
 					bool noCost)
 {
-  registerSlot *tmp = NULL;
-  registers_.find(num, tmp);
-  if (!tmp) return false;
-
-    registerSlot *reg = registers_[num];
-    if (reg->offLimits) return false;
-    else if (reg->refCount > 0) return false;
-    else if (reg->liveState == registerSlot::live) {
-        if (!spillRegister(num, gen, noCost)) {
-            return false;
-        }
-    }
-    else if (reg->keptValue) {
-      return false;
-    }
-    
-    reg->markUsed(true);
-
-    regalloc_printf("Allocated register %d\n", num);
-
-    return true;
+  auto iter = registers_.find(num);
+  if (iter == registers_.end()) return false;
+  registerSlot *reg = iter->second;
+  
+  if (reg->offLimits) return false;
+  else if (reg->refCount > 0) return false;
+  else if (reg->liveState == registerSlot::live) {
+     if (!spillRegister(num, gen, noCost)) {
+        return false;
+     }
+  }
+  else if (reg->keptValue) {
+     return false;
+  }
+  
+  reg->markUsed(true);
+  
+  regalloc_printf("Allocated register %d\n", num);
+  
+  return true;
 }
 
 bool registerSpace::allocateSpecificRegister(codeGen &gen, Register num,
@@ -320,14 +296,13 @@ bool registerSpace::allocateSpecificRegister(codeGen &gen, Register num,
 
   debugPrint();
 
-  registerSlot *tmp = NULL;
-    registers_.find(num, tmp);
-    if (!tmp) {
-      regalloc_printf("Error: register does not exist!\n");
-      return false;
-    }
-
-    registerSlot *reg = registers_[num];
+  auto iter = registers_.find(num);
+  if (iter == registers_.end()) {
+     regalloc_printf("Error: register does not exist!\n");
+     return false;
+  }
+  
+  registerSlot *reg = iter->second;
     if (reg->offLimits) {
       regalloc_printf("Error: register off limits!\n");
       return false;
@@ -542,7 +517,7 @@ bool registerSpace::saveVolatileRegisters(codeGen &gen)
        bool override = false;
        if (registers_[REGNUM_EFLAGS]->liveState == registerSlot::live) {
           override = true;
-          registers_[REGNUM_EFLAGS]->liveState == registerSlot::spilled;
+          registers_[REGNUM_EFLAGS]->liveState = registerSlot::spilled;
        }
        if (registers_[REGNUM_SF]->liveState == registerSlot::live ||
            registers_[REGNUM_ZF]->liveState == registerSlot::live ||
@@ -686,8 +661,8 @@ void registerSpace::incRefCount(Register num)
 void registerSpace::cleanSpace() {
     regalloc_printf("============== CLEAN ==============\n");
 
-    for (regDictIter i = registers_.begin(); i != registers_.end(); i++) {
-        i.currval()->cleanSlot();
+    for (auto i = registers_.begin(); i != registers_.end(); i++) {
+        i->second->cleanSlot();
     }
     for (unsigned i=0; i<realRegisters_.size(); i++) {
        realRegisters_[i]->cleanSlot();
@@ -817,9 +792,10 @@ registerSlot *registerSpace::findRegister(Register source) {
     // Oh, oops... we're handed a register number... and we can't tell if it's
     // GPR, FPR, or SPR...
     if (source == REG_NULL) return NULL;
-    registerSlot *reg = NULL;
-    if (!registers_.find(source, reg)) return NULL;
-    return reg;
+
+    auto iter = registers_.find(source);
+    if (iter == registers_.end()) return NULL;
+    return iter->second;
 }
 
 registerSlot *registerSpace::findRegister(RealRegister source) {
@@ -921,8 +897,8 @@ void registerSpace::unKeepRegister(Register reg) {
 
 
 void registerSpace::specializeSpace(rs_location_t state) {
-    for (regDictIter i = registers_.begin(); i != registers_.end(); i++) {
-        registerSlot *reg = i.currval();
+    for (auto i = registers_.begin(); i != registers_.end(); i++) {
+        registerSlot *reg = i->second;
         switch (state) {
         case arbitrary:
             if (reg->initialState == registerSlot::deadAlways)
@@ -1466,12 +1442,12 @@ void registerSpace::specializeSpace(const bitArray &liveRegs) {
       return;
    }
 #endif
-   for (regDictIter i = registers_.begin(); i != registers_.end(); i++) {
-      if (checkLive(i.currval()->number, liveRegs))
-         i.currval()->liveState = registerSlot::live;
+   for (auto i = registers_.begin(); i != registers_.end(); i++) {
+      if (checkLive(i->second->number, liveRegs))
+         i->second->liveState = registerSlot::live;
       else
       {
-         i.currval()->liveState = registerSlot::dead;
+         i->second->liveState = registerSlot::dead;
       }
    }
 }

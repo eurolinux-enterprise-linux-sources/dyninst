@@ -260,13 +260,13 @@ namespace Dyninst
 	  val.s48val = (int64_t)(v & 0x0000FFFFFFFFFFFFLL);
 	  break;
 	case m512:
-          val.m512val = (void *) v;
+          val.m512val = (void *)(intptr_t) v;
 	  break;
         case dbl128:
-	  val.dbl128val = (void*) v;
+	  val.dbl128val = (void*)(intptr_t) v;
 	  break;
 	case m14:
-	  val.m14val = (void*) v;
+	  val.m14val = (void*)(intptr_t) v;
 	  break;
 	  // Floats should be constructed with float types
 	default:
@@ -524,8 +524,8 @@ namespace Dyninst
       }
     };
     
-    Result operator+(const Result& arg1, const Result& arg2);
-    Result operator*(const Result& arg1, const Result& arg2);
+    INSTRUCTION_EXPORT Result operator+(const Result& arg1, const Result& arg2);
+    INSTRUCTION_EXPORT Result operator*(const Result& arg1, const Result& arg2);
     
   };
 };
