@@ -2,7 +2,7 @@ Summary: An API for Run-time Code Generation
 License: LGPLv2+
 Name: dyninst
 Group: Development/Libraries
-Release: 2%{?dist}
+Release: 3%{?dist}
 URL: http://www.dyninst.org
 Version: 9.3.1
 # Dyninst only has full support for a few architectures.
@@ -152,6 +152,8 @@ find %{buildroot}%{_libdir}/dyninst/testsuite/ \
 %files
 %dir %{_libdir}/dyninst
 %{_libdir}/dyninst/*.so.*
+# dyninst mutators dlopen the runtime library
+%{_libdir}/dyninst/libdyninstAPI_RT.so
 
 %doc %{dyninst_base}/COPYRIGHT
 %doc %{dyninst_base}/LGPL
@@ -186,6 +188,9 @@ find %{buildroot}%{_libdir}/dyninst/testsuite/ \
 %attr(644,root,root) %{_libdir}/dyninst/testsuite/*.a
 
 %changelog
+* Tue Mar 19 2019 Stan Cox <scox@redhat.com> - 9.3.1-3
+- rhbz1498558: dyninst needs the -devel package installed
+
 * Thu Jun 07 2018 Stan Cox <scox@redhat.com> - 9.3.1-2
 - rhbz1441810: Handle regions with no disk backing for ppc static instrumenting
 
