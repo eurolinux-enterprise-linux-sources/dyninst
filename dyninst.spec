@@ -2,7 +2,7 @@ Summary: An API for Run-time Code Generation
 License: LGPLv2+
 Name: dyninst
 Group: Development/Libraries
-Release: 1%{?dist}
+Release: 2%{?dist}
 URL: http://www.dyninst.org
 Version: 9.3.1
 # Dyninst only has full support for a few architectures.
@@ -16,6 +16,7 @@ Source1: https://github.com/dyninst/testsuite/archive/v9.3.0/testsuite-9.3.0.tar
 
 Patch1: testsuite-9.3.0-junit-nullptr.patch
 Patch2: dyninst-9.3.1-Address.patch
+Patch3: dyninst-rhbz1441810.patch
 
 %global dyninst_base dyninst-%{version}
 # Explicit version since it does not match the source version
@@ -90,6 +91,7 @@ making sure that dyninst works properly.
 
 %patch1 -p0 -b.nullptr
 %patch2 -p0 -b.Address
+%patch3 -p0 -b.1441810
 
 # cotire seems to cause non-deterministic gcc errors
 # https://bugzilla.redhat.com/show_bug.cgi?id=1420551
@@ -184,6 +186,9 @@ find %{buildroot}%{_libdir}/dyninst/testsuite/ \
 %attr(644,root,root) %{_libdir}/dyninst/testsuite/*.a
 
 %changelog
+* Thu Jun 07 2018 Stan Cox <scox@redhat.com> - 9.3.1-2
+- rhbz1441810: Handle regions with no disk backing for ppc static instrumenting
+
 * Mon Mar 06 2017 Stan Cox <scox@redhat.com> - 9.3.1-1
 - Update to 9.3.1
 
